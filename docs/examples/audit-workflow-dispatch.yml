@@ -6,7 +6,7 @@
 #   2. Trigger via the Actions tab → "GCP Audit" → Run workflow.
 #
 # Pin the action to a tag or commit SHA for reproducibility, e.g.
-#   uses: stackql/stackql-audit-action@v0.1.1
+#   uses: stackql/stackql-audit-action@v0.1
 
 name: GCP Audit
 
@@ -25,7 +25,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: stackql/stackql-audit-action@v0.1.1
+      - uses: stackql/stackql-audit-action@v0.1
         with:
           project-id: ${{ inputs.project-id }}
           gcp-credentials: ${{ secrets.GCP_SA_JSON }}
