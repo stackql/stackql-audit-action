@@ -12,6 +12,10 @@ inputs:
   gcp-credentials:
     description: 'Full contents of a GCP service account JSON key. Pass via a workflow secret, e.g. secrets.GCP_SA_JSON.'
     required: true
+  google-provider-version:
+    description: 'Version of the Google provider to use with StackQL.'
+    required: false
+    default: 'v25.12.00357'
   queries-path:
     description: 'Path to a custom queries directory (overrides the built-in checks)'
     required: false
@@ -62,7 +66,7 @@ runs:
       run: |
         set -euo pipefail
         log="${RUNNER_TEMP}/stackql-registry-pull.log"
-        stackql registry pull google 2>&1 | tee "$log"
+        stackql exec "registry pull google ${{ inputs.google-provider-version }};" 2>&1 | tee "$log"
 
     - name: Write GCP credentials
       shell: bash
