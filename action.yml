@@ -1,0 +1,89 @@
+name: 'StackQL GCP Audit'
+description: 'Audit your GCP project live with SQL — public firewalls, default service accounts, weak storage configs, and more. No agents, no pipelines.'
+author: 'StackQL'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  project-id:
+    description: 'GCP project ID to audit'
+    required: true
+  gcp-credentials:
+    description: 'Full contents of a GCP service account JSON key. Use a repo secret: ${{ secrets.GCP_SA_JSON }}'
+    required: true
+  queries-path:
+    description: 'Path to a custom queries directory (overrides the built-in checks)'
+    required: false
+    default: ''
+  fail-on-severity:
+    description: 'Fail the workflow if any finding is at or above this severity (CRITICAL, HIGH, MEDIUM, LOW). Use NONE to never fail.'
+    required: false
+    default: 'HIGH'
+  stackql-version:
+    description: 'stackql release to install (e.g. "v0.5.745") or "latest"'
+    required: false
+    default: 'latest'
+
+outputs:
+  findings-count:
+    description: 'Total findings across all checks'
+    value: ${{ steps.audit.outputs.findings-count }}
+  highest-severity:
+    description: 'Highest severity finding (CRITICAL/HIGH/MEDIUM/LOW/NONE)'
+    value: ${{ steps.audit.outputs.highest-severity }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install stackql
+      shell: bash
+      env:
+        STACKQL_VERSION: ${{ inputs.stackql-version }}
+      run: |
+        set -euo pipefail
+        log="${RUNNER_TEMP}/stackql-install.log"
+        cd "${RUNNER_TEMP}"
+        if [ "${STACKQL_VERSION}" = "latest" ]; then
+          url="https://releases.stackql.io/stackql/latest/stackql_linux_amd64.zip"
+        else
+          url="https://releases.stackql.io/stackql/${STACKQL_VERSION}/stackql_linux_amd64.zip"
+        fi
+        {
+          curl -fsSL "$url" -o stackql.zip
+          unzip -q stackql.zip
+          chmod +x stackql
+        } 2>&1 | tee "$log"
+        echo "${RUNNER_TEMP}" >> "$GITHUB_PATH"
+        "${RUNNER_TEMP}/stackql" --version 2>&1 | tee -a "$log" || true
+
+    - name: Pull stackql google provider
+      shell: bash
+      run: |
+        set -euo pipefail
+        log="${RUNNER_TEMP}/stackql-registry-pull.log"
+        stackql registry pull google 2>&1 | tee "$log"
+
+    - name: Write GCP credentials
+      shell: bash
+      env:
+        GCP_SA_JSON: ${{ inputs.gcp-credentials }}
+      run: |
+        set -euo pipefail
+        creds="${RUNNER_TEMP}/gcp-sa.json"
+        printf '%s' "$GCP_SA_JSON" > "$creds"
+        chmod 600 "$creds"
+        echo "STACKQL_AUDIT_GCP_CREDS=$creds" >> "$GITHUB_ENV"
+
+    - name: Run audit
+      id: audit
+      shell: bash
+      env:
+        PROJECT_ID: ${{ inputs.project-id }}
+        QUERIES_PATH: ${{ inputs.queries-path }}
+        FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        python3 -m pip install --quiet -r "${ACTION_PATH}/cicd/requirements.txt"
+        python3 "${ACTION_PATH}/scripts/audit.py"

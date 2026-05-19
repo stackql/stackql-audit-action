@@ -1,0 +1,29 @@
+name: Self-test
+
+on:
+  workflow_dispatch:
+    inputs:
+      project-id:
+        description: GCP project ID to audit
+        required: true
+      fail-on-severity:
+        description: Severity threshold to fail on (CRITICAL/HIGH/MEDIUM/LOW/NONE)
+        required: false
+        default: NONE
+      stackql-version:
+        description: stackql release to install
+        required: false
+        default: latest
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./
+        with:
+          project-id: ${{ inputs.project-id }}
+          gcp-credentials: ${{ secrets.GCP_SA_JSON }}
+          fail-on-severity: ${{ inputs.fail-on-severity }}
+          stackql-version: ${{ inputs.stackql-version }}

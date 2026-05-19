@@ -1,0 +1,15 @@
+id: gcp-cloudsql-public-ip
+name: Cloud SQL instances reachable on a public IP
+severity: HIGH
+description: |
+  Cloud SQL instances with a PRIMARY (public) IP address. Prefer private IP
+  with VPC peering and authorized networks restricted to known CIDRs.
+remediation: |
+  Disable public IP on the instance settings and configure private services
+  access for VPC peering.
+query: |
+  SELECT name, region, databaseVersion, state, ipAddresses
+  FROM google.sql.instances
+  WHERE project = '${PROJECT_ID}'
+filter: cloudsql_has_public_ip
+columns: [name, region, databaseVersion, state]

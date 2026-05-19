@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+"""StackQL audit runner.
+
+Discovers check definitions (YAML) under a queries directory, runs each one via
+its own `stackql exec` subprocess (in parallel), optionally pipes the rows
+through a Python filter function, and writes a markdown summary into
+$GITHUB_STEP_SUMMARY.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+SEVERITY_ORDER = {"NONE": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+SEVERITY_BADGE = {
+    "CRITICAL": "🟥 CRITICAL",
+    "HIGH": "🟧 HIGH",
+    "MEDIUM": "🟨 MEDIUM",
+    "LOW": "🟦 LOW",
+    "NONE": "⬜ NONE",
+}
+MAX_PARALLEL = int(os.environ.get("STACKQL_AUDIT_PARALLEL", "8"))
+
+
+def build_auth_arg(creds_path: str) -> str:
+    return json.dumps({
+        "google": {
+            "type": "service_account",
+            "credentialsfilepath": creds_path,
+        }
+    })
+
+
+def run_stackql(query: str, auth: str) -> tuple[list[dict] | None, str | None]:
+    result = subprocess.run(
+        ["stackql", "exec", "--auth", auth, "--output", "json", query],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        err = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        return None, err
+    out = result.stdout.strip()
+    if not out or out == "[]":
+        return [], None
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError as e:
+        return None, f"failed to parse stackql JSON: {e}\n--- raw (first 1KB) ---\n{out[:1024]}"
+    if isinstance(data, dict):
+        data = [data]
+    return data, None
+
+
+def load_filters_module(action_path: Path):
+    filters_path = action_path / "scripts" / "filters.py"
+    spec = importlib.util.spec_from_file_location("audit_filters", filters_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def apply_filter(filters_mod: Any, name: str, rows: list[dict], args: dict | None) -> list[dict]:
+    fn = getattr(filters_mod, name, None)
+    if fn is None:
+        raise RuntimeError(f"unknown filter function: {name}")
+    return fn(rows, **(args or {}))
+
+
+def execute_check(check: dict, project_id: str, auth: str, filters_mod: Any) -> dict:
+    """Run a single check and return a result dict."""
+    query = check["query"].replace("${PROJECT_ID}", project_id)
+    rows, err = run_stackql(query, auth)
+    if err:
+        return {"check": check, "status": "error", "error": err, "rows": []}
+    if check.get("filter"):
+        try:
+            rows = apply_filter(filters_mod, check["filter"], rows or [], check.get("filter_args"))
+        except Exception as e:
+            return {"check": check, "status": "error", "error": f"filter error: {e}", "rows": []}
+    if not rows:
+        return {"check": check, "status": "pass", "rows": []}
+    return {"check": check, "status": "findings", "rows": rows}
+
+
+def render_findings(check: dict, rows: list[dict]) -> str:
+    sev = check.get("severity", "MEDIUM").upper()
+    badge = SEVERITY_BADGE.get(sev, sev)
+    lines: list[str] = []
+    lines.append(f"### {badge} — {check['name']}  ·  {len(rows)} finding(s)")
+    if check.get("description"):
+        lines.append(f"_{check['description'].strip()}_\n")
+    columns = check.get("columns") or list(rows[0].keys())
+    lines.append("| " + " | ".join(columns) + " |")
+    lines.append("| " + " | ".join("---" for _ in columns) + " |")
+    for row in rows:
+        cells = []
+        for col in columns:
+            val = row.get(col, "")
+            if isinstance(val, (dict, list)):
+                val = json.dumps(val)
+            cells.append(str(val).replace("|", "\\|").replace("\n", " "))
+        lines.append("| " + " | ".join(cells) + " |")
+    lines.append("")
+    if check.get("remediation"):
+        lines.append(f"**Remediation:** {check['remediation'].strip()}\n")
+    return "\n".join(lines)
+
+
+def render_pass(check: dict) -> str:
+    name = check["name"]
+    desc = (check.get("description") or "").strip()
+    return f"### ✅ {name}\n_{desc}_\n\nNo findings.\n"
+
+
+def render_error(check: dict, err: str) -> str:
+    name = check["name"]
+    return (
+        f"### ⚠️ {name} — query error\n"
+        "<details><summary>Error</summary>\n\n"
+        f"```\n{err}\n```\n\n</details>\n"
+    )
+
+
+def main() -> int:
+    project_id = os.environ["PROJECT_ID"]
+    fail_on = os.environ.get("FAIL_ON_SEVERITY", "HIGH").upper()
+    fail_threshold = SEVERITY_ORDER.get(fail_on, 3)
+    creds = os.environ["STACKQL_AUDIT_GCP_CREDS"]
+    auth = build_auth_arg(creds)
+
+    action_path = Path(os.environ["ACTION_PATH"])
+    qp = os.environ.get("QUERIES_PATH", "").strip()
+    queries_path = Path(qp) if qp else action_path / "queries"
+    if not queries_path.is_dir():
+        print(f"::error::queries path not found: {queries_path}")
+        return 2
+
+    filters_mod = load_filters_module(action_path)
+
+    check_files = sorted(list(queries_path.glob("*.yaml")) + list(queries_path.glob("*.yml")))
+    if not check_files:
+        print(f"::warning::no checks found in {queries_path}")
+        return 0
+
+    checks: list[dict] = []
+    for cf in check_files:
+        with cf.open() as f:
+            check = yaml.safe_load(f)
+        check["_file"] = cf.name
+        checks.append(check)
+
+    results: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL) as pool:
+        futures = {
+            pool.submit(execute_check, c, project_id, auth, filters_mod): c["_file"]
+            for c in checks
+        }
+        for fut in as_completed(futures):
+            file_key = futures[fut]
+            try:
+                results[file_key] = fut.result()
+            except Exception as e:
+                results[file_key] = {
+                    "check": next(c for c in checks if c["_file"] == file_key),
+                    "status": "error",
+                    "error": f"unexpected error: {e}",
+                    "rows": [],
+                }
+
+    findings_by_severity = {k: 0 for k in SEVERITY_ORDER}
+    total_findings = 0
+    highest_severity = "NONE"
+    error_count = 0
+    sections: list[str] = []
+
+    for c in checks:
+        r = results[c["_file"]]
+        check = r["check"]
+        if r["status"] == "error":
+            error_count += 1
+            sections.append(render_error(check, r["error"]))
+            print(f"::warning::{check['name']}: {r['error'].splitlines()[0]}")
+            continue
+        if r["status"] == "pass":
+            sections.append(render_pass(check))
+            continue
+        rows = r["rows"]
+        sev = check.get("severity", "MEDIUM").upper()
+        findings_by_severity[sev] += len(rows)
+        total_findings += len(rows)
+        if SEVERITY_ORDER[sev] > SEVERITY_ORDER[highest_severity]:
+            highest_severity = sev
+        sections.append(render_findings(check, rows))
+
+    out_lines: list[str] = []
+    out_lines.append("# StackQL GCP Audit")
+    out_lines.append(
+        f"**Project:** `{project_id}`  ·  **Checks run:** {len(checks)}  ·  **Errors:** {error_count}"
+    )
+    out_lines.append("")
+    out_lines.append("## Summary")
+    out_lines.append("| Severity | Findings |")
+    out_lines.append("| --- | --- |")
+    for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+        out_lines.append(f"| {SEVERITY_BADGE[sev]} | {findings_by_severity[sev]} |")
+    out_lines.append(f"| **Total** | **{total_findings}** |\n")
+    out_lines.append("## Checks\n")
+    out_lines.extend(sections)
+    rendered = "\n".join(out_lines)
+
+    print(rendered)
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path, "a") as f:
+            f.write(rendered + "\n")
+
+    gh_output = os.environ.get("GITHUB_OUTPUT")
+    if gh_output:
+        with open(gh_output, "a") as f:
+            f.write(f"findings-count={total_findings}\n")
+            f.write(f"highest-severity={highest_severity}\n")
+
+    should_fail = (
+        total_findings > 0
+        and fail_threshold > 0
+        and SEVERITY_ORDER[highest_severity] >= fail_threshold
+    )
+    if should_fail:
+        print(f"\n::error::Audit found {highest_severity} findings (fail-on-severity={fail_on})")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
