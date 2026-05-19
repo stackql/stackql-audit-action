@@ -8,7 +8,6 @@ markdown table on the workflow run page. Copy-paste setup, first results in
 under two minutes.
 
 ![sample summary](/docs/img/google-screenshot-summary.png)
-<!-- TODO: replace with a real screenshot of a failing run summary -->
 
 ## What it finds (v1)
 
@@ -135,4 +134,4 @@ query time. You see what GCP sees right now.
 
 ## License
 
-Apache-2.0
+MIT
