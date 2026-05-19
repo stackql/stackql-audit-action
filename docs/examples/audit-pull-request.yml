@@ -1,0 +1,28 @@
+# Copy this into .github/workflows/gcp-audit-pr.yml in your repo.
+#
+# Setup:
+#   1. Add a repo *variable* named GCP_PROJECT_ID with the target project ID.
+#      (Settings → Secrets and variables → Actions → Variables tab.)
+#      Project IDs aren't sensitive — variable, not secret.
+#   2. Add a repo *secret* named GCP_SA_JSON with the service account JSON.
+#   3. Open a PR against main → workflow runs automatically.
+#
+# Note: PRs from forks do not have access to secrets by default; this pattern
+# works for same-repo branches. Use pull_request_target with care if you need
+# fork PR coverage.
+
+name: GCP Audit (PR)
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: stackql/stackql-audit-action@v0.1.1
+        with:
+          project-id: ${{ vars.GCP_PROJECT_ID }}
+          gcp-credentials: ${{ secrets.GCP_SA_JSON }}
+          fail-on-severity: HIGH

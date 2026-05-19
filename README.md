@@ -7,7 +7,7 @@ Google Cloud project using [stackql](https://stackql.io). Findings render as a
 markdown table on the workflow run page. Copy-paste setup, first results in
 under two minutes.
 
-![sample summary](docs/screenshot-summary.png)
+![sample summary](/docs/img/google-screenshot-summary.png)
 <!-- TODO: replace with a real screenshot of a failing run summary -->
 
 ## What it finds (v1)
@@ -30,26 +30,12 @@ replace at will.
 1. Create a GCP service account with read-only audit permissions on the
    target project (see [Required permissions](#required-permissions)).
 2. Add its JSON key as a repo secret named `GCP_SA_JSON`.
-3. Drop this into `.github/workflows/audit.yml`:
+3. Copy one of the ready-to-use workflows from **[`docs/examples/`](docs/examples/)** into your repo's `.github/workflows/`:
 
-   ```yaml
-   name: GCP Audit
-   on:
-     schedule:
-       - cron: '0 9 * * 1'   # weekly, Monday 09:00 UTC
-     workflow_dispatch: {}
+   - **[`audit-workflow-dispatch.yml`](docs/examples/audit-workflow-dispatch.yml)** — manual trigger from the Actions tab; enter the project ID at run time.
+   - **[`audit-pull-request.yml`](docs/examples/audit-pull-request.yml)** — audit on every PR against `main`; reads the project ID from a repo variable.
 
-   jobs:
-     audit:
-       runs-on: ubuntu-latest
-       steps:
-         - uses: stackql/stackql-audit-action@v1
-           with:
-             project-id: my-gcp-project
-             gcp-credentials: ${{ secrets.GCP_SA_JSON }}
-   ```
-
-Open the workflow run → the audit summary renders inline.
+Open the workflow run → the audit summary renders inline on the run page.
 
 ## Inputs
 
