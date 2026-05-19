@@ -10,7 +10,7 @@ inputs:
     description: 'GCP project ID to audit'
     required: true
   gcp-credentials:
-    description: 'Full contents of a GCP service account JSON key. Use a repo secret: ${{ secrets.GCP_SA_JSON }}'
+    description: 'Full contents of a GCP service account JSON key. Pass via a workflow secret, e.g. secrets.GCP_SA_JSON.'
     required: true
   queries-path:
     description: 'Path to a custom queries directory (overrides the built-in checks)'
