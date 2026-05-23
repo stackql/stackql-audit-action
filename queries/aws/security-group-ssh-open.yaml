@@ -5,7 +5,7 @@ description: |
   Security-group ingress rules allowing tcp/22 from 0.0.0.0/0. Public SSH is a
   primary vector for brute-force credential attacks.
 remediation: |
-  Restrict cidr_ipv4 to known ranges, or front instances with SSM Session Manager.
+  Restrict the rule's source ranges to known CIDRs, or front instances with SSM Session Manager.
 query: |
   SELECT groupId, groupName, vpcId, ipPermissions
   FROM aws.ec2_native.security_groups
