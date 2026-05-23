@@ -122,3 +122,60 @@ def cloudsql_has_public_ip(rows: list[dict]) -> list[dict]:
                 matches.append(row)
                 break
     return matches
+
+
+# --- Azure helpers -------------------------------------------------------
+# Azure resources surface their ARM body under a `properties` object (camelCase
+# keys). These walk that structure; first-cut, refine against live output.
+
+_AZURE_ANY_SOURCE = {"*", "internet", "0.0.0.0/0"}
+
+
+def _port_in_range(port: int, spec: Any) -> bool:
+    spec = str(spec).strip()
+    if spec in ("*", ""):
+        return True
+    return _port_matches(port, spec)
+
+
+def nsg_allows_port(rows: list[dict], *, port: int, protocol: str = "tcp") -> list[dict]:
+    """Keep NSGs with an inbound Allow rule for `protocol`/`port` from any source."""
+    matches: list[dict] = []
+    for row in rows:
+        props = _coerce_dict(row.get("properties"))
+        for rule in _coerce_list(props.get("securityRules")):
+            rp = _coerce_dict(rule).get("properties")
+            rp = _coerce_dict(rp) if rp is not None else _coerce_dict(rule)
+            if (rp.get("access") or "").lower() != "allow":
+                continue
+            if (rp.get("direction") or "").lower() != "inbound":
+                continue
+            proto = (rp.get("protocol") or "").lower()
+            if proto not in (protocol.lower(), "*"):
+                continue
+            sources = {s.lower() for s in _coerce_list(rp.get("sourceAddressPrefix")) + _coerce_list(rp.get("sourceAddressPrefixes"))}
+            if not (sources & _AZURE_ANY_SOURCE):
+                continue
+            ports = _coerce_list(rp.get("destinationPortRange")) + _coerce_list(rp.get("destinationPortRanges"))
+            if any(_port_in_range(port, p) for p in ports):
+                matches.append(row)
+                break
+    return matches
+
+
+def azure_sql_public(rows: list[dict]) -> list[dict]:
+    matches: list[dict] = []
+    for row in rows:
+        props = _coerce_dict(row.get("properties"))
+        if (props.get("publicNetworkAccess") or "").lower() == "enabled":
+            matches.append(row)
+    return matches
+
+
+def azure_storage_public_blob(rows: list[dict]) -> list[dict]:
+    matches: list[dict] = []
+    for row in rows:
+        props = _coerce_dict(row.get("properties"))
+        if props.get("allowBlobPublicAccess") is True:
+            matches.append(row)
+    return matches

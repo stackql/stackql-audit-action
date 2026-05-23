@@ -1,0 +1,15 @@
+id: azure-storage-public-blob
+name: Storage accounts allowing public blob access
+severity: MEDIUM
+description: |
+  Storage accounts with allowBlobPublicAccess = true permit containers/blobs to
+  be configured for anonymous public read.
+remediation: |
+  Set allowBlobPublicAccess to false unless a container genuinely needs anonymous
+  access, and prefer SAS / private endpoints.
+query: |
+  SELECT name, location, properties
+  FROM azure.storage.accounts
+  WHERE subscriptionId = '${SUBSCRIPTION_ID}'
+filter: azure_storage_public_blob
+columns: [name, location]

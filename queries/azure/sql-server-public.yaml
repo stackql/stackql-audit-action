@@ -1,0 +1,14 @@
+id: azure-sql-server-public
+name: SQL servers with public network access
+severity: HIGH
+description: |
+  Azure SQL logical servers with publicNetworkAccess = Enabled accept connections
+  from outside the virtual network (subject to firewall rules).
+remediation: |
+  Set publicNetworkAccess to Disabled and use private endpoints.
+query: |
+  SELECT name, location, properties
+  FROM azure.sql.servers
+  WHERE subscriptionId = '${SUBSCRIPTION_ID}'
+filter: azure_sql_public
+columns: [name, location]

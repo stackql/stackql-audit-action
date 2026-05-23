@@ -1,0 +1,18 @@
+id: aws-sg-ssh-open
+name: SSH (22/tcp) open to the internet
+severity: HIGH
+description: |
+  Security-group ingress rules allowing tcp/22 from 0.0.0.0/0. Public SSH is a
+  primary vector for brute-force credential attacks.
+remediation: |
+  Restrict cidr_ipv4 to known ranges, or front instances with SSM Session Manager.
+query: |
+  SELECT group_id, ip_protocol, from_port, to_port, cidr_ipv4
+  FROM aws.ec2.security_group_rules
+  WHERE region = '${AWS_REGION}'
+    AND is_egress = false
+    AND cidr_ipv4 = '0.0.0.0/0'
+    AND ip_protocol IN ('tcp', '-1')
+    AND from_port <= 22
+    AND to_port >= 22
+columns: [group_id, ip_protocol, from_port, to_port, cidr_ipv4]

@@ -1,0 +1,15 @@
+id: aws-instance-public-ip
+name: EC2 instances with a public IP
+severity: MEDIUM
+description: |
+  Running EC2 instances that have a public IPv4 address are directly reachable
+  from the internet and widen the attack surface.
+remediation: |
+  Place instances in private subnets behind a NAT gateway / load balancer, or
+  disassociate the public IP if it isn't needed.
+query: |
+  SELECT instance_id, public_ip_address, private_ip_address, vpc_id
+  FROM aws.ec2.instances
+  WHERE region = '${AWS_REGION}'
+    AND public_ip_address IS NOT NULL
+columns: [instance_id, public_ip_address, vpc_id]

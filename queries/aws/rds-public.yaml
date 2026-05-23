@@ -1,0 +1,15 @@
+id: aws-rds-public
+name: RDS instances publicly accessible
+severity: HIGH
+description: |
+  RDS DB instances with publicly_accessible = true get a public endpoint and are
+  reachable from outside the VPC.
+remediation: |
+  Set PubliclyAccessible to false and reach the database over private networking
+  (VPC peering, PrivateLink, or a bastion).
+query: |
+  SELECT db_instance_identifier, engine, endpoint, publicly_accessible
+  FROM aws.rds.db_instances
+  WHERE region = '${AWS_REGION}'
+    AND publicly_accessible = true
+columns: [db_instance_identifier, engine, endpoint]
