@@ -23,7 +23,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 
-stackql exec 'registry pull aws v26.03.00379;'
+stackql exec 'registry pull aws v26.05.00395;'
 stackql exec 'registry pull azure v24.10.00267;'
 stackql exec 'registry pull google v25.12.00357;'
 

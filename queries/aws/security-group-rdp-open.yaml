@@ -7,11 +7,11 @@ description: |
 remediation: |
   Restrict the rule's source ranges to known CIDRs, or front instances with SSM Session Manager.
 query: |
-  SELECT groupId, groupName, vpcId, ipPermissions
-  FROM aws.ec2_native.security_groups
+  SELECT group_id, group_name, vpc_id, ip_permissions
+  FROM aws.ec2.security_groups
   WHERE region = '${AWS_REGION}'
 filter: sg_allows_port
 filter_args:
   port: 3389
   protocol: tcp
-columns: [groupId, groupName, vpcId]
+columns: [group_id, group_name, vpc_id]

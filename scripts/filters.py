@@ -75,6 +75,31 @@ def firewall_allows_port(
     return matches
 
 
+def _aws_list(val: Any) -> list:
+    """Normalize the AWS Query-API polymorphic `{"item": ...}` wrapper to a flat list.
+
+    The EC2 describe output collapses lists by cardinality: one element renders
+    as ``{"item": {...}}``, many as ``{"item": [...]}``, empty as ``""``, and the
+    whole field may be ``null``. stackql may also hand us the column as a JSON
+    string. This flattens all of those to a plain list of dicts.
+    """
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return []
+        try:
+            val = json.loads(s)
+        except json.JSONDecodeError:
+            return []
+    if not val:  # None, "", {}, []
+        return []
+    if isinstance(val, dict):
+        return _aws_list(val["item"]) if "item" in val else [val]
+    if isinstance(val, list):
+        return val
+    return []
+
+
 def sg_allows_port(
     rows: list[dict],
     *,
@@ -82,21 +107,21 @@ def sg_allows_port(
     protocol: str = "tcp",
     source: str = "0.0.0.0/0",
 ) -> list[dict]:
-    """Keep AWS security groups whose ipPermissions allow `protocol`/`port` from `source`.
+    """Keep AWS security groups whose ip_permissions allow `protocol`/`port` from `source`.
 
-    Each ipPermissions entry looks like
-    {ipProtocol, fromPort, toPort, ipRanges:[{cidrIp}], ...}; ipProtocol '-1'
-    means all protocols/all ports, and absent from/to also means all ports.
+    Each permission is {ipProtocol, fromPort, toPort, ipRanges, ...}; ipProtocol
+    '-1' means all protocols/all ports. ipRanges/ip_permissions arrive in the
+    polymorphic `{"item": ...}` form handled by _aws_list.
     """
     matches: list[dict] = []
     for row in rows:
-        for perm in _coerce_list(row.get("ipPermissions")):
+        for perm in _aws_list(row.get("ip_permissions")):
             if not isinstance(perm, dict):
                 continue
             proto = str(perm.get("ipProtocol", "")).lower()
             if proto not in (protocol.lower(), "-1"):
                 continue
-            cidrs = [r.get("cidrIp") for r in _coerce_list(perm.get("ipRanges")) if isinstance(r, dict)]
+            cidrs = [r.get("cidrIp") for r in _aws_list(perm.get("ipRanges")) if isinstance(r, dict)]
             if source not in cidrs:
                 continue
             frm, to = perm.get("fromPort"), perm.get("toPort")

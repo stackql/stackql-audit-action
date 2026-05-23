@@ -16,7 +16,7 @@ inputs:
     required: false
     default: ''
   google-provider-version:
-    description: 'Version of the Google provider to pull (blank = latest).'
+    description: 'Version of the Google provider to pull (blank = v25.12.00357).'
     required: false
     default: 'v25.12.00357'
 
@@ -34,9 +34,9 @@ inputs:
     required: false
     default: ''
   aws-provider-version:
-    description: 'Version of the AWS provider to pull (blank = latest).'
+    description: 'Version of the AWS provider to pull (blank = v26.05.00395).'
     required: false
-    default: ''
+    default: 'v26.05.00395'
 
   # --- Azure ---
   azure-subscription-id:
@@ -56,9 +56,9 @@ inputs:
     required: false
     default: ''
   azure-provider-version:
-    description: 'Version of the Azure provider to pull (blank = latest).'
+    description: 'Version of the Azure provider to pull (blank = v24.10.00267).'
     required: false
-    default: ''
+    default: 'v24.10.00267'
 
   # --- Common ---
   queries-path:
