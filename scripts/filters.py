@@ -75,6 +75,43 @@ def firewall_allows_port(
     return matches
 
 
+def sg_allows_port(
+    rows: list[dict],
+    *,
+    port: int,
+    protocol: str = "tcp",
+    source: str = "0.0.0.0/0",
+) -> list[dict]:
+    """Keep AWS security groups whose ipPermissions allow `protocol`/`port` from `source`.
+
+    Each ipPermissions entry looks like
+    {ipProtocol, fromPort, toPort, ipRanges:[{cidrIp}], ...}; ipProtocol '-1'
+    means all protocols/all ports, and absent from/to also means all ports.
+    """
+    matches: list[dict] = []
+    for row in rows:
+        for perm in _coerce_list(row.get("ipPermissions")):
+            if not isinstance(perm, dict):
+                continue
+            proto = str(perm.get("ipProtocol", "")).lower()
+            if proto not in (protocol.lower(), "-1"):
+                continue
+            cidrs = [r.get("cidrIp") for r in _coerce_list(perm.get("ipRanges")) if isinstance(r, dict)]
+            if source not in cidrs:
+                continue
+            frm, to = perm.get("fromPort"), perm.get("toPort")
+            if proto == "-1" or frm is None or to is None:
+                matches.append(row)
+                break
+            try:
+                if int(frm) <= port <= int(to):
+                    matches.append(row)
+                    break
+            except (TypeError, ValueError):
+                continue
+    return matches
+
+
 def instance_has_external_ip(rows: list[dict]) -> list[dict]:
     matches: list[dict] = []
     for row in rows:

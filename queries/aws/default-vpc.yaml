@@ -9,8 +9,8 @@ remediation: |
   Delete the default VPC in regions you don't use, and deploy into purpose-built
   VPCs with explicit subnet/SG design.
 query: |
-  SELECT vpc_id, cidr_block, is_default
-  FROM aws.ec2.vpcs
+  SELECT vpcId, cidrBlock, isDefault
+  FROM aws.ec2_native.vpcs
   WHERE region = '${AWS_REGION}'
-    AND is_default = true
-columns: [vpc_id, cidr_block]
+    AND isDefault = 'true'
+columns: [vpcId, cidrBlock]

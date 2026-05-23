@@ -7,12 +7,11 @@ description: |
 remediation: |
   Restrict cidr_ipv4 to known ranges, or front instances with SSM Session Manager.
 query: |
-  SELECT group_id, ip_protocol, from_port, to_port, cidr_ipv4
-  FROM aws.ec2.security_group_rules
+  SELECT groupId, groupName, vpcId, ipPermissions
+  FROM aws.ec2_native.security_groups
   WHERE region = '${AWS_REGION}'
-    AND is_egress = false
-    AND cidr_ipv4 = '0.0.0.0/0'
-    AND ip_protocol IN ('tcp', '-1')
-    AND from_port <= 22
-    AND to_port >= 22
-columns: [group_id, ip_protocol, from_port, to_port, cidr_ipv4]
+filter: sg_allows_port
+filter_args:
+  port: 22
+  protocol: tcp
+columns: [groupId, groupName, vpcId]

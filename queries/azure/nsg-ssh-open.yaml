@@ -7,11 +7,11 @@ description: |
 remediation: |
   Scope sourceAddressPrefix to known ranges, or use Azure Bastion.
 query: |
-  SELECT name, location, properties
+  SELECT id, name, properties
   FROM azure.network.security_groups
   WHERE subscriptionId = '${SUBSCRIPTION_ID}'
 filter: nsg_allows_port
 filter_args:
   port: 22
   protocol: tcp
-columns: [name, location]
+columns: [name, id]
