@@ -1,0 +1,192 @@
+name: 'StackQL Deep Cloud Audit'
+description: 'Org-wide enumerated audits — S3 full scan, AWS region sweep, GCP org descent, Azure management-group descent. Runs scripts/discover.py; the shallow root action is unaffected.'
+author: 'StackQL'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  target:
+    description: 'Space-separated deep targets: s3 aws-regions gcp-org azure-org'
+    required: false
+    default: 's3 aws-regions gcp-org azure-org'
+
+  # --- GCP (gcp-org) ---
+  gcp-credentials:
+    description: 'GCP service account JSON key contents.'
+    required: false
+    default: ''
+  google-org-id:
+    description: 'GCP organization ID, digits only.'
+    required: false
+    default: ''
+  google-provider-version:
+    description: 'stackql Google provider version (blank = latest).'
+    required: false
+    default: 'v25.12.00357'
+
+  # --- AWS (s3, aws-regions) ---
+  aws-access-key-id:
+    description: 'AWS access key ID. Pass via a workflow secret.'
+    required: false
+    default: ''
+  aws-secret-access-key:
+    description: 'AWS secret access key. Pass via a workflow secret.'
+    required: false
+    default: ''
+  aws-region:
+    description: 'AWS region — S3 endpoint + region-sweep seed.'
+    required: false
+    default: ''
+  aws-provider-version:
+    description: 'stackql AWS provider version (blank = latest).'
+    required: false
+    default: 'v26.05.00395'
+
+  # --- Azure (azure-org) ---
+  azure-tenant-id:
+    description: 'Azure AD tenant ID (service-principal auth).'
+    required: false
+    default: ''
+  azure-client-id:
+    description: 'Azure AD application (client) ID.'
+    required: false
+    default: ''
+  azure-client-secret:
+    description: 'Azure AD client secret. Pass via a workflow secret.'
+    required: false
+    default: ''
+  azure-mgmt-group:
+    description: 'Azure management group ID (blank = all tenant subscriptions).'
+    required: false
+    default: ''
+  azure-provider-version:
+    description: 'stackql Azure provider version (blank = latest).'
+    required: false
+    default: 'v24.10.00267'
+
+  # --- Budget (deep only; -1 = unlimited) ---
+  max-nodes:
+    description: 'Max org-nodes visited (regions/projects/subscriptions/buckets).'
+    required: false
+    default: '-1'
+  max-queries:
+    description: 'Max stackql queries issued.'
+    required: false
+    default: '-1'
+  timeout-seconds:
+    description: 'Overall wall-clock budget in seconds.'
+    required: false
+    default: '-1'
+  parallel:
+    description: 'Concurrent workers per target.'
+    required: false
+    default: '8'
+
+  # --- Common ---
+  fail-on-severity:
+    description: 'Severity threshold discover.py annotates findings at (the action itself does not gate the run).'
+    required: false
+    default: 'HIGH'
+  stackql-version:
+    description: 'stackql release to install (e.g. "v0.5.745") or "latest".'
+    required: false
+    default: 'latest'
+  upload-logs:
+    description: 'Upload per-invocation logs + *-findings.jsonl as the deep-audit-logs artifact.'
+    required: false
+    default: 'true'
+  log-retention-days:
+    description: 'Retention (days) for the logs artifact (0 = repo default).'
+    required: false
+    default: '0'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install stackql
+      shell: bash
+      env:
+        STACKQL_VERSION: ${{ inputs.stackql-version }}
+      run: |
+        set -euo pipefail
+        cd "${RUNNER_TEMP}"
+        if [ "${STACKQL_VERSION}" = "latest" ]; then
+          url="https://releases.stackql.io/stackql/latest/stackql_linux_amd64.zip"
+        else
+          url="https://releases.stackql.io/stackql/${STACKQL_VERSION}/stackql_linux_amd64.zip"
+        fi
+        curl -fsSL "$url" -o stackql.zip
+        unzip -q stackql.zip && chmod +x stackql
+        echo "${RUNNER_TEMP}" >> "$GITHUB_PATH"
+
+    - name: Pull stackql providers
+      shell: bash
+      env:
+        GCP_CREDS: ${{ inputs.gcp-credentials }}
+        AWS_KEY: ${{ inputs.aws-access-key-id }}
+        AZURE_TENANT: ${{ inputs.azure-tenant-id }}
+        GOOGLE_VER: ${{ inputs.google-provider-version }}
+        AWS_VER: ${{ inputs.aws-provider-version }}
+        AZURE_VER: ${{ inputs.azure-provider-version }}
+      run: |
+        set -euo pipefail
+        pull() { local p="$1" v="$2"; if [ -n "$v" ]; then stackql exec "registry pull $p $v;"; else stackql exec "registry pull $p;"; fi; }
+        [ -n "$GCP_CREDS" ]    && pull google "$GOOGLE_VER"
+        [ -n "$AWS_KEY" ]      && pull aws "$AWS_VER"
+        [ -n "$AZURE_TENANT" ] && pull azure "$AZURE_VER"
+        true
+
+    - name: Write GCP credentials
+      if: ${{ inputs.gcp-credentials != '' }}
+      shell: bash
+      env:
+        GCP_SA_JSON: ${{ inputs.gcp-credentials }}
+      run: |
+        set -euo pipefail
+        creds="${RUNNER_TEMP}/gcp-sa.json"
+        printf '%s' "$GCP_SA_JSON" > "$creds"
+        chmod 600 "$creds"
+        echo "STACKQL_AUDIT_GCP_CREDS=$creds" >> "$GITHUB_ENV"
+
+    - name: Run deep audits
+      shell: bash
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
+        AWS_REGION: ${{ inputs.aws-region }}
+        GOOGLE_ORG_ID: ${{ inputs.google-org-id }}
+        AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+        AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+        AZURE_CLIENT_SECRET: ${{ inputs.azure-client-secret }}
+        AZURE_MGMT_GROUP: ${{ inputs.azure-mgmt-group }}
+        FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
+        STACKQL_DEEP_MAX_NODES: ${{ inputs.max-nodes }}
+        STACKQL_DEEP_MAX_QUERIES: ${{ inputs.max-queries }}
+        STACKQL_DEEP_TIMEOUT: ${{ inputs.timeout-seconds }}
+        STACKQL_S3_PARALLEL: ${{ inputs.parallel }}
+        STACKQL_AWS_PARALLEL: ${{ inputs.parallel }}
+        STACKQL_GCP_PARALLEL: ${{ inputs.parallel }}
+        STACKQL_AZURE_PARALLEL: ${{ inputs.parallel }}
+        STACKQL_AUDIT_LOG_DIR: ${{ github.workspace }}/deep-audit-log
+        TARGETS: ${{ inputs.target }}
+      run: |
+        set -uo pipefail
+        ACTION_PATH="$(cd "${{ github.action_path }}/.." && pwd)"   # repo root (deep/ is a subdir)
+        export ACTION_PATH
+        export RUN_STAMP="$(date +%s)"
+        python3 -m pip install --quiet -r "${ACTION_PATH}/cicd/requirements.txt"
+        for t in $TARGETS; do
+          echo "::group::deep: $t"
+          python3 "${ACTION_PATH}/scripts/discover.py" "$t" || echo "::warning::deep target '$t' exited non-zero"
+          echo "::endgroup::"
+        done
+
+    - name: Upload logs + findings
+      if: ${{ always() && inputs.upload-logs == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: deep-audit-logs
+        path: ${{ github.workspace }}/deep-audit-log/
+        if-no-files-found: ignore
+        retention-days: ${{ inputs.log-retention-days }}
