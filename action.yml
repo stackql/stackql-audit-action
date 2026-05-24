@@ -77,6 +77,10 @@ inputs:
     description: 'Upload per-invocation stackql logs (cicd/log) as a workflow artifact named "stackql-audit-logs". Useful for debugging empty/odd results.'
     required: false
     default: 'false'
+  log-retention-days:
+    description: 'Retention in days for the uploaded logs artifact (0 = repository default). Integer in [0, 90]. Only used when upload-logs is true.'
+    required: false
+    default: '0'
 
 outputs:
   findings-count:
@@ -89,6 +93,23 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    - name: Validate log-retention-days
+      if: ${{ inputs.upload-logs == 'true' }}
+      shell: bash
+      env:
+        LOG_RETENTION_DAYS: ${{ inputs.log-retention-days }}
+      run: |
+        set -euo pipefail
+        case "$LOG_RETENTION_DAYS" in
+          ''|*[!0-9]*)
+            echo "::error::log-retention-days must be an integer in [0, 90] (got '${LOG_RETENTION_DAYS}')"
+            exit 1 ;;
+        esac
+        if [ "$LOG_RETENTION_DAYS" -gt 90 ]; then
+          echo "::error::log-retention-days must be <= 90 (got '${LOG_RETENTION_DAYS}')"
+          exit 1
+        fi
+
     - name: Install stackql
       shell: bash
       env:
@@ -177,4 +198,4 @@ runs:
         name: stackql-audit-logs
         path: ${{ github.action_path }}/cicd/log/
         if-no-files-found: ignore
-        retention-days: 7
+        retention-days: ${{ inputs.log-retention-days }}

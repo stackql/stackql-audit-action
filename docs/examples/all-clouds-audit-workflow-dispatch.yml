@@ -1,0 +1,64 @@
+# Copy this into .github/workflows/cloud-audit.yml in your repo.
+#
+# Audits GCP, AWS, and Azure in a single run. A provider is audited only if its
+# credentials are supplied — so you can start with one cloud and add the others
+# later just by adding their secrets, no workflow changes needed.
+#
+# Setup (add what you need; omit a provider to skip it):
+#   GCP   — secret  GCP_SA_JSON            (service account JSON key)
+#   AWS   — secrets AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+#   Azure — secrets AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
+#
+# Scopes (project / region / subscription) are entered at run time below.
+#
+# Pin the action to a tag or commit SHA for reproducibility, e.g.
+#   uses: stackql/stackql-audit-action@v0.1
+
+name: Cloud Audit (all)
+
+on:
+  workflow_dispatch:
+    inputs:
+      gcp-project-id:
+        description: GCP project ID (leave blank to skip GCP)
+        required: false
+        default: ''
+      aws-region:
+        description: AWS region, e.g. us-east-1 (leave blank to skip AWS)
+        required: false
+        default: ''
+      azure-subscription-id:
+        description: Azure subscription ID (leave blank to skip Azure)
+        required: false
+        default: ''
+      fail-on-severity:
+        description: Severity threshold to fail on (CRITICAL/HIGH/MEDIUM/LOW/NONE)
+        required: false
+        default: HIGH
+      upload-logs:
+        description: Upload per-invocation stackql logs as an artifact (for debugging)
+        required: false
+        default: 'false'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: stackql/stackql-audit-action@v0.1
+        with:
+          # GCP
+          gcp-project-id: ${{ inputs.gcp-project-id }}
+          gcp-credentials: ${{ secrets.GCP_SA_JSON }}
+          # AWS
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws-region }}
+          # Azure
+          azure-subscription-id: ${{ inputs.azure-subscription-id }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          # Common
+          fail-on-severity: ${{ inputs.fail-on-severity }}
+          upload-logs: ${{ inputs.upload-logs }}
+          log-retention-days: '7'

@@ -1,20 +1,20 @@
-# Copy this into .github/workflows/gcp-audit.yml in your repo.
+# Copy this into .github/workflows/aws-audit.yml in your repo.
 #
 # Setup:
-#   1. Add a repo secret named GCP_SA_JSON containing the JSON of a GCP
-#      service account with read-only audit permissions on the target project.
-#   2. Trigger via the Actions tab → "GCP Audit" → Run workflow.
+#   1. Add repo secrets for an IAM user/role with read-only audit permissions:
+#        AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+#   2. Trigger via the Actions tab → "AWS Audit" → Run workflow, entering the region.
 #
 # Pin the action to a tag or commit SHA for reproducibility, e.g.
 #   uses: stackql/stackql-audit-action@v0.1
 
-name: GCP Audit
+name: AWS Audit
 
 on:
   workflow_dispatch:
     inputs:
-      project-id:
-        description: GCP project ID to audit
+      region:
+        description: AWS region to audit (e.g. us-east-1)
         required: true
       fail-on-severity:
         description: Severity threshold to fail on (CRITICAL/HIGH/MEDIUM/LOW/NONE)
@@ -31,8 +31,9 @@ jobs:
     steps:
       - uses: stackql/stackql-audit-action@v0.1
         with:
-          gcp-project-id: ${{ inputs.project-id }}
-          gcp-credentials: ${{ secrets.GCP_SA_JSON }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region }}
           fail-on-severity: ${{ inputs.fail-on-severity }}
           upload-logs: ${{ inputs.upload-logs }}
           # Retention for the logs artifact, in days. 0 = repository default; max 90.

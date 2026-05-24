@@ -1,20 +1,22 @@
-# Copy this into .github/workflows/gcp-audit.yml in your repo.
+# Copy this into .github/workflows/azure-audit.yml in your repo.
 #
 # Setup:
-#   1. Add a repo secret named GCP_SA_JSON containing the JSON of a GCP
-#      service account with read-only audit permissions on the target project.
-#   2. Trigger via the Actions tab → "GCP Audit" → Run workflow.
+#   1. Create a service principal with read-only audit permissions on the
+#      subscription, then add repo secrets:
+#        AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
+#   2. Trigger via the Actions tab → "Azure Audit" → Run workflow, entering the
+#      subscription ID.
 #
 # Pin the action to a tag or commit SHA for reproducibility, e.g.
 #   uses: stackql/stackql-audit-action@v0.1
 
-name: GCP Audit
+name: Azure Audit
 
 on:
   workflow_dispatch:
     inputs:
-      project-id:
-        description: GCP project ID to audit
+      subscription-id:
+        description: Azure subscription ID to audit
         required: true
       fail-on-severity:
         description: Severity threshold to fail on (CRITICAL/HIGH/MEDIUM/LOW/NONE)
@@ -31,8 +33,10 @@ jobs:
     steps:
       - uses: stackql/stackql-audit-action@v0.1
         with:
-          gcp-project-id: ${{ inputs.project-id }}
-          gcp-credentials: ${{ secrets.GCP_SA_JSON }}
+          azure-subscription-id: ${{ inputs.subscription-id }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           fail-on-severity: ${{ inputs.fail-on-severity }}
           upload-logs: ${{ inputs.upload-logs }}
           # Retention for the logs artifact, in days. 0 = repository default; max 90.
