@@ -241,3 +241,56 @@ def azure_storage_public_blob(rows: list[dict]) -> list[dict]:
         if props.get("allowBlobPublicAccess") is True:
             matches.append(row)
     return matches
+
+
+# --- AWS S3 (Cloud Control detail rows) ----------------------------------
+# Each filter evaluates a single aws.s3.buckets detail row. Columns are JSON
+# (PascalCase keys), handed back by stackql as objects or JSON strings — the
+# _coerce_* helpers absorb either.
+
+_S3_PAB_KEYS = ("BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets")
+
+
+def s3_public_access_block_incomplete(rows: list[dict]) -> list[dict]:
+    """Flag buckets where Public Access Block is absent or not all four enabled."""
+    matches: list[dict] = []
+    for row in rows:
+        pab = _coerce_dict(row.get("public_access_block_configuration"))
+        if not all(pab.get(k) is True for k in _S3_PAB_KEYS):
+            matches.append(row)
+    return matches
+
+
+def s3_no_kms_encryption(rows: list[dict]) -> list[dict]:
+    """Flag buckets whose default encryption is not SSE-KMS (i.e. SSE-S3/AES256 or none)."""
+    matches: list[dict] = []
+    for row in rows:
+        enc = _coerce_dict(row.get("bucket_encryption"))
+        rules = _coerce_list(enc.get("ServerSideEncryptionConfiguration"))
+        uses_kms = any(
+            _coerce_dict(_coerce_dict(r).get("ServerSideEncryptionByDefault")).get("SSEAlgorithm") == "aws:kms"
+            for r in rules
+        )
+        if not uses_kms:
+            matches.append(row)
+    return matches
+
+
+def s3_versioning_disabled(rows: list[dict]) -> list[dict]:
+    """Flag buckets whose versioning status is not Enabled."""
+    matches: list[dict] = []
+    for row in rows:
+        if _coerce_dict(row.get("versioning_configuration")).get("Status") != "Enabled":
+            matches.append(row)
+    return matches
+
+
+def s3_acls_enabled(rows: list[dict]) -> list[dict]:
+    """Flag buckets whose Object Ownership is not BucketOwnerEnforced (ACLs still active)."""
+    matches: list[dict] = []
+    for row in rows:
+        rules = _coerce_list(_coerce_dict(row.get("ownership_controls")).get("Rules"))
+        ownerships = [_coerce_dict(r).get("ObjectOwnership") for r in rules]
+        if not ownerships or any(o != "BucketOwnerEnforced" for o in ownerships):
+            matches.append(row)
+    return matches

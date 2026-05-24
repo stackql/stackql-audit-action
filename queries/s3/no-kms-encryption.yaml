@@ -1,0 +1,11 @@
+id: aws-s3-no-kms-encryption
+name: S3 bucket not encrypted with KMS (CMK)
+severity: LOW
+description: |
+  Default encryption uses SSE-S3 (AES256) rather than SSE-KMS with a
+  customer-managed key. All buckets are encrypted at rest by default, so this
+  flags those without the stronger key control and audit trail KMS provides.
+remediation: |
+  Set default encryption to aws:kms with a customer-managed key.
+filter: s3_no_kms_encryption
+columns: [bucket_name, region]
