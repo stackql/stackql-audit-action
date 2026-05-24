@@ -61,4 +61,4 @@ jobs:
           # Common
           fail-on-severity: ${{ inputs.fail-on-severity }}
           upload-logs: ${{ inputs.upload-logs }}
-          log-retention-days: '7'
+          log-retention-days: '0'
