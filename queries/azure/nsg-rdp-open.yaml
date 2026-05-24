@@ -1,0 +1,17 @@
+id: azure-nsg-rdp-open
+name: RDP (3389/tcp) open to the internet
+severity: HIGH
+description: |
+  Network security groups with an inbound Allow rule for tcp/3389 from any source
+  (*, Internet, or 0.0.0.0/0). Public RDP is a primary ransomware entry vector.
+remediation: |
+  Scope sourceAddressPrefix to known ranges, or use Azure Bastion.
+query: |
+  SELECT id, name, properties
+  FROM azure.network.security_groups
+  WHERE subscriptionId = '${SUBSCRIPTION_ID}'
+filter: nsg_allows_port
+filter_args:
+  port: 3389
+  protocol: tcp
+columns: [name, id]

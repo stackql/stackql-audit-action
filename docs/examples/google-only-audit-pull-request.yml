@@ -23,6 +23,6 @@ jobs:
     steps:
       - uses: stackql/stackql-audit-action@v0.1
         with:
-          project-id: ${{ vars.GCP_PROJECT_ID }}
+          gcp-project-id: ${{ vars.GCP_PROJECT_ID }}
           gcp-credentials: ${{ secrets.GCP_SA_JSON }}
           fail-on-severity: HIGH

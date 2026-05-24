@@ -1,0 +1,40 @@
+# Copy this into .github/workflows/aws-audit.yml in your repo.
+#
+# Setup:
+#   1. Add repo secrets for an IAM user/role with read-only audit permissions:
+#        AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+#   2. Trigger via the Actions tab → "AWS Audit" → Run workflow, entering the region.
+#
+# Pin the action to a tag or commit SHA for reproducibility, e.g.
+#   uses: stackql/stackql-audit-action@v0.1
+
+name: AWS Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: AWS region to audit (e.g. us-east-1)
+        required: true
+      fail-on-severity:
+        description: Severity threshold to fail on (CRITICAL/HIGH/MEDIUM/LOW/NONE)
+        required: false
+        default: HIGH
+      upload-logs:
+        description: Upload per-invocation stackql logs as an artifact (for debugging)
+        required: false
+        default: 'false'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: stackql/stackql-audit-action@v0.1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region }}
+          fail-on-severity: ${{ inputs.fail-on-severity }}
+          upload-logs: ${{ inputs.upload-logs }}
+          # Retention for the logs artifact, in days. 0 = repository default; max 90.
+          log-retention-days: '7'

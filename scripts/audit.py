@@ -14,6 +14,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -31,35 +32,72 @@ SEVERITY_BADGE = {
 MAX_PARALLEL = int(os.environ.get("STACKQL_AUDIT_PARALLEL", "8"))
 
 
-def build_auth_arg(creds_path: str) -> str:
-    return json.dumps({
-        "google": {
-            "type": "service_account",
-            "credentialsfilepath": creds_path,
+def build_auth() -> tuple[str, set[str]]:
+    """Assemble a combined stackql --auth object from whatever creds are present.
+
+    One object can carry every provider at once, so a single `stackql exec`
+    covers all of them. Returns the JSON string plus the set of enabled
+    provider keys (a provider is enabled iff its creds were supplied).
+    """
+    auth: dict[str, dict] = {}
+    gcp_creds = os.environ.get("STACKQL_AUDIT_GCP_CREDS")
+    if gcp_creds:
+        auth["google"] = {"type": "service_account", "credentialsfilepath": gcp_creds}
+    if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
+        auth["aws"] = {
+            "type": "aws_signing_v4",
+            "keyIDenvvar": "AWS_ACCESS_KEY_ID",
+            "credentialsenvvar": "AWS_SECRET_ACCESS_KEY",
         }
-    })
+    if os.environ.get("AZURE_SUBSCRIPTION_ID"):
+        auth["azure"] = {"type": "azure_default"}
+    return json.dumps(auth), set(auth.keys())
 
 
-def run_stackql(query: str, auth: str) -> tuple[list[dict] | None, str | None]:
+def scope_vars(provider: str) -> dict[str, str]:
+    """Per-provider placeholder substitutions applied to a check's query."""
+    if provider == "google":
+        return {"PROJECT_ID": os.environ.get("PROJECT_ID", "")}
+    if provider == "aws":
+        return {"AWS_REGION": os.environ.get("AWS_REGION", "")}
+    if provider == "azure":
+        return {"SUBSCRIPTION_ID": os.environ.get("AZURE_SUBSCRIPTION_ID", "")}
+    return {}
+
+
+def run_stackql(query: str, auth: str, log_path: Path) -> tuple[list[dict] | None, str | None, int]:
     result = subprocess.run(
         ["stackql", "exec", "--auth", auth, "--output", "json", query],
         capture_output=True,
         text=True,
         check=False,
     )
-    if result.returncode != 0:
-        err = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
-        return None, err
+    rc = result.returncode
+    stderr = result.stderr.strip()
+    # Always write the per-invocation log, even on exit 0: a query that returns
+    # no rows can still emit warnings/errors on stderr, and that's invisible
+    # from the result alone — which is exactly what we want to surface.
+    try:
+        log_path.write_text(
+            f"exit: {rc}\n"
+            f"--- query ---\n{query}\n"
+            f"--- stderr ---\n{stderr or '(empty)'}\n"
+        )
+    except OSError:
+        pass
+    if rc != 0:
+        err = stderr or result.stdout.strip() or f"exit {rc}"
+        return None, err, rc
     out = result.stdout.strip()
     if not out or out == "[]":
-        return [], None
+        return [], None, rc
     try:
         data = json.loads(out)
     except json.JSONDecodeError as e:
-        return None, f"failed to parse stackql JSON: {e}\n--- raw (first 1KB) ---\n{out[:1024]}"
+        return None, f"failed to parse stackql JSON: {e}\n--- raw (first 1KB) ---\n{out[:1024]}", rc
     if isinstance(data, dict):
         data = [data]
-    return data, None
+    return data, None, rc
 
 
 def load_filters_module(action_path: Path):
@@ -78,27 +116,31 @@ def apply_filter(filters_mod: Any, name: str, rows: list[dict], args: dict | Non
     return fn(rows, **(args or {}))
 
 
-def execute_check(check: dict, project_id: str, auth: str, filters_mod: Any) -> dict:
+def execute_check(check: dict, auth: str, filters_mod: Any, log_dir: Path) -> dict:
     """Run a single check and return a result dict."""
-    query = check["query"].replace("${PROJECT_ID}", project_id)
-    rows, err = run_stackql(query, auth)
+    query = check["query"]
+    for var, val in scope_vars(check["_provider"]).items():
+        query = query.replace(f"${{{var}}}", val)
+    slug = check["_file"].replace("/", "__").rsplit(".", 1)[0]
+    rows, err, rc = run_stackql(query, auth, log_dir / f"{slug}.log")
     if err:
-        return {"check": check, "status": "error", "error": err, "rows": []}
+        return {"check": check, "status": "error", "error": err, "rows": [], "exit_code": rc}
     if check.get("filter"):
         try:
             rows = apply_filter(filters_mod, check["filter"], rows or [], check.get("filter_args"))
         except Exception as e:
-            return {"check": check, "status": "error", "error": f"filter error: {e}", "rows": []}
+            return {"check": check, "status": "error", "error": f"filter error: {e}", "rows": [], "exit_code": rc}
     if not rows:
-        return {"check": check, "status": "pass", "rows": []}
-    return {"check": check, "status": "findings", "rows": rows}
+        return {"check": check, "status": "pass", "rows": [], "exit_code": rc}
+    return {"check": check, "status": "findings", "rows": rows, "exit_code": rc}
 
 
 def render_findings(check: dict, rows: list[dict]) -> str:
     sev = check.get("severity", "MEDIUM").upper()
     badge = SEVERITY_BADGE.get(sev, sev)
+    prov = check.get("_provider", "").upper()
     lines: list[str] = []
-    lines.append(f"### {badge} — {check['name']}  ·  {len(rows)} finding(s)")
+    lines.append(f"### {badge} — `{prov}` {check['name']}  ·  {len(rows)} finding(s)")
     if check.get("description"):
         lines.append(f"_{check['description'].strip()}_\n")
     columns = check.get("columns") or list(rows[0].keys())
@@ -119,52 +161,66 @@ def render_findings(check: dict, rows: list[dict]) -> str:
 
 
 def render_pass(check: dict) -> str:
+    prov = check.get("_provider", "").upper()
     name = check["name"]
     desc = (check.get("description") or "").strip()
-    return f"### ✅ {name}\n_{desc}_\n\nNo findings.\n"
+    return f"### ✅ `{prov}` {name}\n_{desc}_\n\nNo findings.\n"
 
 
 def render_error(check: dict, err: str) -> str:
+    prov = check.get("_provider", "").upper()
     name = check["name"]
     return (
-        f"### ⚠️ {name} — query error\n"
+        f"### ⚠️ `{prov}` {name} — query error\n"
         "<details><summary>Error</summary>\n\n"
         f"```\n{err}\n```\n\n</details>\n"
     )
 
 
 def main() -> int:
-    project_id = os.environ["PROJECT_ID"]
     fail_on = os.environ.get("FAIL_ON_SEVERITY", "HIGH").upper()
     fail_threshold = SEVERITY_ORDER.get(fail_on, 3)
-    creds = os.environ["STACKQL_AUDIT_GCP_CREDS"]
-    auth = build_auth_arg(creds)
+    auth, enabled = build_auth()
+    if not enabled:
+        print("::error::no provider credentials supplied (set GCP, AWS, or Azure creds)")
+        return 2
 
     action_path = Path(os.environ["ACTION_PATH"])
     qp = os.environ.get("QUERIES_PATH", "").strip()
-    queries_path = Path(qp) if qp else action_path / "queries"
-    if not queries_path.is_dir():
-        print(f"::error::queries path not found: {queries_path}")
+    queries_root = Path(qp) if qp else action_path / "queries"
+    if not queries_root.is_dir():
+        print(f"::error::queries path not found: {queries_root}")
         return 2
 
     filters_mod = load_filters_module(action_path)
 
-    check_files = sorted(list(queries_path.glob("*.yaml")) + list(queries_path.glob("*.yml")))
-    if not check_files:
-        print(f"::warning::no checks found in {queries_path}")
-        return 0
+    # Per-run log dir; each stackql invocation drops a <provider__check>.log here.
+    run_stamp = os.environ.get("RUN_STAMP") or time.strftime("%Y%m%d-%H%M%S")
+    log_root = Path(os.environ.get("STACKQL_AUDIT_LOG_DIR") or (action_path / "cicd" / "log"))
+    log_dir = log_root / run_stamp
+    log_dir.mkdir(parents=True, exist_ok=True)
 
+    # Discover checks under queries/<provider>/, but only for enabled providers.
     checks: list[dict] = []
-    for cf in check_files:
-        with cf.open() as f:
-            check = yaml.safe_load(f)
-        check["_file"] = cf.name
-        checks.append(check)
+    for provider in sorted(enabled):
+        pdir = queries_root / provider
+        if not pdir.is_dir():
+            continue
+        for cf in sorted(list(pdir.glob("*.yaml")) + list(pdir.glob("*.yml"))):
+            with cf.open() as f:
+                check = yaml.safe_load(f)
+            check["_file"] = f"{provider}/{cf.name}"
+            check["_provider"] = provider
+            checks.append(check)
+
+    if not checks:
+        print(f"::warning::no checks found for enabled providers {sorted(enabled)} in {queries_root}")
+        return 0
 
     results: dict[str, dict] = {}
     with ThreadPoolExecutor(max_workers=MAX_PARALLEL) as pool:
         futures = {
-            pool.submit(execute_check, c, project_id, auth, filters_mod): c["_file"]
+            pool.submit(execute_check, c, auth, filters_mod, log_dir): c["_file"]
             for c in checks
         }
         for fut in as_completed(futures):
@@ -177,7 +233,24 @@ def main() -> int:
                     "status": "error",
                     "error": f"unexpected error: {e}",
                     "rows": [],
+                    "exit_code": None,
                 }
+
+    # Track stackql exit codes across the run: write an index and flag non-zero.
+    nonzero: list[tuple[str, Any]] = []
+    manifest = ["exit\tcheck"]
+    for c in checks:
+        code = results[c["_file"]].get("exit_code")
+        manifest.append(f"{code}\t{c['_file']}")
+        if code != 0:
+            nonzero.append((c["_file"], code))
+    try:
+        (log_dir / "index.log").write_text("\n".join(manifest) + "\n")
+    except OSError:
+        pass
+    for file_key, code in nonzero:
+        print(f"::warning::stackql non-zero exit ({code}) for {file_key}")
+    print(f"::notice::stackql logs in {log_dir}")
 
     findings_by_severity = {k: 0 for k in SEVERITY_ORDER}
     total_findings = 0
@@ -205,9 +278,10 @@ def main() -> int:
         sections.append(render_findings(check, rows))
 
     out_lines: list[str] = []
-    out_lines.append("# StackQL GCP Audit")
+    out_lines.append("# StackQL Cloud Audit")
     out_lines.append(
-        f"**Project:** `{project_id}`  ·  **Checks run:** {len(checks)}  ·  **Errors:** {error_count}"
+        f"**Providers:** {', '.join(sorted(enabled))}  ·  **Checks run:** {len(checks)}"
+        f"  ·  **Errors:** {error_count}  ·  **Non-zero exits:** {len(nonzero)}"
     )
     out_lines.append("")
     out_lines.append("## Summary")

@@ -20,6 +20,10 @@ on:
         description: Severity threshold to fail on (CRITICAL/HIGH/MEDIUM/LOW/NONE)
         required: false
         default: HIGH
+      upload-logs:
+        description: Upload per-invocation stackql logs as an artifact (for debugging)
+        required: false
+        default: 'false'
 
 jobs:
   audit:
@@ -27,6 +31,9 @@ jobs:
     steps:
       - uses: stackql/stackql-audit-action@v0.1
         with:
-          project-id: ${{ inputs.project-id }}
+          gcp-project-id: ${{ inputs.project-id }}
           gcp-credentials: ${{ secrets.GCP_SA_JSON }}
           fail-on-severity: ${{ inputs.fail-on-severity }}
+          upload-logs: ${{ inputs.upload-logs }}
+          # Retention for the logs artifact, in days. 0 = repository default; max 90.
+          log-retention-days: '7'

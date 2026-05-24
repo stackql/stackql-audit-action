@@ -1,23 +1,68 @@
-name: 'StackQL GCP Audit'
-description: 'Audit your GCP project live with SQL — public firewalls, default service accounts, weak storage configs, and more. No agents, no pipelines.'
+name: 'StackQL Cloud Audit'
+description: 'Audit GCP, AWS, and Azure live with SQL — public firewalls, public IPs, weak storage/SQL configs, and more. No agents, no pipelines. A provider runs only when its credentials are supplied.'
 author: 'StackQL'
 branding:
   icon: 'shield'
   color: 'blue'
 
 inputs:
-  project-id:
-    description: 'GCP project ID to audit'
-    required: true
+  # --- GCP ---
+  gcp-project-id:
+    description: 'GCP project ID to audit (substituted as ${PROJECT_ID} in google checks).'
+    required: false
+    default: ''
   gcp-credentials:
     description: 'Full contents of a GCP service account JSON key. Pass via a workflow secret, e.g. secrets.GCP_SA_JSON.'
-    required: true
+    required: false
+    default: ''
   google-provider-version:
-    description: 'Version of the Google provider to use with StackQL.'
+    description: 'Version of the Google provider to pull (blank = v25.12.00357).'
     required: false
     default: 'v25.12.00357'
+
+  # --- AWS ---
+  aws-access-key-id:
+    description: 'AWS access key ID.'
+    required: false
+    default: ''
+  aws-secret-access-key:
+    description: 'AWS secret access key. Pass via a workflow secret.'
+    required: false
+    default: ''
+  aws-region:
+    description: 'AWS region to audit (substituted as ${AWS_REGION} in aws checks).'
+    required: false
+    default: ''
+  aws-provider-version:
+    description: 'Version of the AWS provider to pull (blank = v26.05.00395).'
+    required: false
+    default: 'v26.05.00395'
+
+  # --- Azure ---
+  azure-subscription-id:
+    description: 'Azure subscription ID to audit (substituted as ${SUBSCRIPTION_ID} in azure checks).'
+    required: false
+    default: ''
+  azure-tenant-id:
+    description: 'Azure AD tenant ID (for service-principal auth).'
+    required: false
+    default: ''
+  azure-client-id:
+    description: 'Azure AD application (client) ID.'
+    required: false
+    default: ''
+  azure-client-secret:
+    description: 'Azure AD client secret. Pass via a workflow secret.'
+    required: false
+    default: ''
+  azure-provider-version:
+    description: 'Version of the Azure provider to pull (blank = v24.10.00267).'
+    required: false
+    default: 'v24.10.00267'
+
+  # --- Common ---
   queries-path:
-    description: 'Path to a custom queries directory (overrides the built-in checks)'
+    description: 'Path to a custom queries directory (must contain per-provider subdirs: google/ aws/ azure/).'
     required: false
     default: ''
   fail-on-severity:
@@ -28,6 +73,14 @@ inputs:
     description: 'stackql release to install (e.g. "v0.5.745") or "latest"'
     required: false
     default: 'latest'
+  upload-logs:
+    description: 'Upload per-invocation stackql logs (cicd/log) as a workflow artifact named "stackql-audit-logs". Useful for debugging empty/odd results.'
+    required: false
+    default: 'false'
+  log-retention-days:
+    description: 'Retention in days for the uploaded logs artifact (0 = repository default). Integer in [0, 90]. Only used when upload-logs is true.'
+    required: false
+    default: '0'
 
 outputs:
   findings-count:
@@ -40,6 +93,23 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    - name: Validate log-retention-days
+      if: ${{ inputs.upload-logs == 'true' }}
+      shell: bash
+      env:
+        LOG_RETENTION_DAYS: ${{ inputs.log-retention-days }}
+      run: |
+        set -euo pipefail
+        case "$LOG_RETENTION_DAYS" in
+          ''|*[!0-9]*)
+            echo "::error::log-retention-days must be an integer in [0, 90] (got '${LOG_RETENTION_DAYS}')"
+            exit 1 ;;
+        esac
+        if [ "$LOG_RETENTION_DAYS" -gt 90 ]; then
+          echo "::error::log-retention-days must be <= 90 (got '${LOG_RETENTION_DAYS}')"
+          exit 1
+        fi
+
     - name: Install stackql
       shell: bash
       env:
@@ -61,14 +131,35 @@ runs:
         echo "${RUNNER_TEMP}" >> "$GITHUB_PATH"
         "${RUNNER_TEMP}/stackql" --version 2>&1 | tee -a "$log" || true
 
-    - name: Pull stackql google provider
+    - name: Pull stackql providers
       shell: bash
+      env:
+        GCP_CREDS: ${{ inputs.gcp-credentials }}
+        AWS_KEY: ${{ inputs.aws-access-key-id }}
+        AZURE_SUB: ${{ inputs.azure-subscription-id }}
+        GOOGLE_VER: ${{ inputs.google-provider-version }}
+        AWS_VER: ${{ inputs.aws-provider-version }}
+        AZURE_VER: ${{ inputs.azure-provider-version }}
       run: |
         set -euo pipefail
         log="${RUNNER_TEMP}/stackql-registry-pull.log"
-        stackql exec "registry pull google ${{ inputs.google-provider-version }};" 2>&1 | tee "$log"
+        pull() {
+          local provider="$1" version="$2"
+          if [ -n "$version" ]; then
+            stackql exec "registry pull ${provider} ${version};"
+          else
+            stackql exec "registry pull ${provider};"
+          fi
+        }
+        {
+          [ -n "$GCP_CREDS" ]  && pull google "$GOOGLE_VER"
+          [ -n "$AWS_KEY" ]    && pull aws "$AWS_VER"
+          [ -n "$AZURE_SUB" ]  && pull azure "$AZURE_VER"
+          true
+        } 2>&1 | tee "$log"
 
     - name: Write GCP credentials
+      if: ${{ inputs.gcp-credentials != '' }}
       shell: bash
       env:
         GCP_SA_JSON: ${{ inputs.gcp-credentials }}
@@ -83,7 +174,14 @@ runs:
       id: audit
       shell: bash
       env:
-        PROJECT_ID: ${{ inputs.project-id }}
+        PROJECT_ID: ${{ inputs.gcp-project-id }}
+        AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
+        AWS_REGION: ${{ inputs.aws-region }}
+        AZURE_SUBSCRIPTION_ID: ${{ inputs.azure-subscription-id }}
+        AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+        AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+        AZURE_CLIENT_SECRET: ${{ inputs.azure-client-secret }}
         QUERIES_PATH: ${{ inputs.queries-path }}
         FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
         ACTION_PATH: ${{ github.action_path }}
@@ -91,3 +189,13 @@ runs:
         set -euo pipefail
         python3 -m pip install --quiet -r "${ACTION_PATH}/cicd/requirements.txt"
         python3 "${ACTION_PATH}/scripts/audit.py"
+
+    - name: Upload stackql logs
+      # always() so logs upload even when the audit fails on findings (exit 1)
+      if: ${{ always() && inputs.upload-logs == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: stackql-audit-logs
+        path: ${{ github.action_path }}/cicd/log/
+        if-no-files-found: ignore
+        retention-days: ${{ inputs.log-retention-days }}
