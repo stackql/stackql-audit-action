@@ -126,6 +126,18 @@ Read-only, on the audited scope:
   EC2/RDS describe calls the checks make.
 - **Azure** — the `Reader` role on the subscription.
 
+For the **org-wide deep audits** (`scripts/discover.py`), grant the same read
+roles **one scope up** so they inherit, plus enumeration rights:
+
+- **GCP** — `roles/viewer` + `roles/resourcemanager.folderViewer` at the
+  **organization** node (Viewer covers the resource reads + project listing;
+  folderViewer adds folder descent).
+- **AWS** — `SecurityAudit` (or `ReadOnlyAccess`) on the principal; the S3 deep
+  scan additionally needs `s3:GetBucket*` and, if it routes via Cloud Control,
+  `cloudcontrol:GetResource`/`ListResources` (`ReadOnlyAccess` includes these).
+- **Azure** — `Reader` at the **management-group** (or tenant root) scope, which
+  inherits to every child subscription and covers the management-group descent.
+
 ## Custom checks
 
 Point `queries-path` at your own directory of per-provider subdirs. Each file
