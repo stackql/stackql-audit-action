@@ -1,0 +1,11 @@
+id: aws-s3-public-access-block
+name: S3 bucket without full public access block
+severity: HIGH
+description: |
+  Buckets where Public Access Block does not enable all four protections
+  (BlockPublicAcls, IgnorePublicAcls, BlockPublicPolicy, RestrictPublicBuckets)
+  can be exposed publicly via a bucket ACL or policy.
+remediation: |
+  Enable all four Public Access Block settings on the bucket (or account-wide).
+filter: s3_public_access_block_incomplete
+columns: [bucket_name, region]

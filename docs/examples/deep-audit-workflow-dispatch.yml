@@ -1,0 +1,51 @@
+# Copy this into .github/workflows/deep-audit.yml in your repo.
+#
+# Runs the deep (enumerated) audits — s3, aws-regions, gcp-org, azure-org — by
+# consuming the deep sub-action. The shallow root action is unaffected.
+#
+# Add the secrets you use:
+#   GCP_SA_JSON                                            (gcp-org)
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY               (s3, aws-regions)
+#   AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET  (azure-org)
+
+name: Deep Cloud Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      google-org-id:
+        description: GCP organization ID, digits only (for gcp-org)
+        required: false
+        default: ''
+      aws-region:
+        description: AWS region — S3 endpoint + region-sweep seed
+        required: false
+        default: us-east-1
+      azure-mgmt-group:
+        description: Azure management group ID (blank = all tenant subscriptions)
+        required: false
+        default: ''
+      max-nodes:
+        description: 'Budget: max org-nodes visited (-1 = unlimited)'
+        required: false
+        default: '-1'
+
+jobs:
+  deep-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: stackql/stackql-audit-action/deep@v0.3
+        with:
+          target: s3 aws-regions gcp-org azure-org
+          gcp-credentials: ${{ secrets.GCP_SA_JSON }}
+          google-org-id: ${{ inputs.google-org-id }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws-region }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          azure-mgmt-group: ${{ inputs.azure-mgmt-group }}
+          max-nodes: ${{ inputs.max-nodes }}
+          timeout-seconds: '1800'
+          upload-logs: 'true'

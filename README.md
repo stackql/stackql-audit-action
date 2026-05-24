@@ -10,6 +10,8 @@ under two minutes.
 **A provider is audited only if its credentials are supplied** — start with one
 cloud, add the others later just by adding their secrets.
 
+> Auditing a whole org (every project / region / subscription, not a single scope)? See **[Deep audits](/docs/deep-audit.md)**.
+
 ![sample summary](/docs/img/google-screenshot-summary.png)
 
 ## What it finds
@@ -125,6 +127,18 @@ Read-only, on the audited scope:
 - **AWS** — the managed `SecurityAudit` policy (or `ReadOnlyAccess`) covers the
   EC2/RDS describe calls the checks make.
 - **Azure** — the `Reader` role on the subscription.
+
+For the **org-wide deep audits** (`scripts/discover.py`), grant the same read
+roles **one scope up** so they inherit, plus enumeration rights:
+
+- **GCP** — `roles/viewer` + `roles/resourcemanager.folderViewer` at the
+  **organization** node (Viewer covers the resource reads + project listing;
+  folderViewer adds folder descent).
+- **AWS** — `SecurityAudit` (or `ReadOnlyAccess`) on the principal; the S3 deep
+  scan additionally needs `s3:GetBucket*` and, if it routes via Cloud Control,
+  `cloudcontrol:GetResource`/`ListResources` (`ReadOnlyAccess` includes these).
+- **Azure** — `Reader` at the **management-group** (or tenant root) scope, which
+  inherits to every child subscription and covers the management-group descent.
 
 ## Custom checks
 

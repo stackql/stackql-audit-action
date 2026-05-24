@@ -1,0 +1,11 @@
+id: aws-s3-acls-enabled
+name: S3 bucket has ACLs enabled (ownership not enforced)
+severity: MEDIUM
+description: |
+  Object Ownership is not set to BucketOwnerEnforced, so ACLs remain in effect —
+  a legacy access path that complicates IAM-only access control and can grant
+  access outside bucket policy.
+remediation: |
+  Set Object Ownership to BucketOwnerEnforced to disable ACLs.
+filter: s3_acls_enabled
+columns: [bucket_name, region]
