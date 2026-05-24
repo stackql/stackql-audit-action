@@ -18,7 +18,7 @@ cloud, add the others later just by adding their secrets.
 | --- | --- | --- |
 | GCP | SSH (22/tcp) open to the internet | HIGH |
 | GCP | RDP (3389/tcp) open to the internet | HIGH |
-| GCP | Cloud SQL instances with a public IP | HIGH |
+| GCP | Cloud SQL instances reachable on a public IP | HIGH |
 | GCP | Compute instances with public IPs | MEDIUM |
 | GCP | Compute instances using the default service account | MEDIUM |
 | GCP | Storage buckets without uniform bucket-level access | MEDIUM |
