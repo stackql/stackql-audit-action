@@ -73,6 +73,10 @@ inputs:
     description: 'stackql release to install (e.g. "v0.5.745") or "latest"'
     required: false
     default: 'latest'
+  upload-logs:
+    description: 'Upload per-invocation stackql logs (cicd/log) as a workflow artifact named "stackql-audit-logs". Useful for debugging empty/odd results.'
+    required: false
+    default: 'false'
 
 outputs:
   findings-count:
@@ -164,3 +168,13 @@ runs:
         set -euo pipefail
         python3 -m pip install --quiet -r "${ACTION_PATH}/cicd/requirements.txt"
         python3 "${ACTION_PATH}/scripts/audit.py"
+
+    - name: Upload stackql logs
+      # always() so logs upload even when the audit fails on findings (exit 1)
+      if: ${{ always() && inputs.upload-logs == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: stackql-audit-logs
+        path: ${{ github.action_path }}/cicd/log/
+        if-no-files-found: ignore
+        retention-days: 7
