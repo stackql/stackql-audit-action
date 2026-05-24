@@ -10,6 +10,8 @@ under two minutes.
 **A provider is audited only if its credentials are supplied** — start with one
 cloud, add the others later just by adding their secrets.
 
+> Auditing a whole org (every project / region / subscription, not a single scope)? See **[Deep audits](/docs/deep-audit.md)**.
+
 ![sample summary](/docs/img/google-screenshot-summary.png)
 
 ## What it finds
