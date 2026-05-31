@@ -187,6 +187,12 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
+        providers=""
+        [ -n "${STACKQL_AUDIT_GCP_CREDS:-}" ] && providers="$providers google"
+        [ -n "${AWS_ACCESS_KEY_ID:-}" ]       && providers="$providers aws"
+        [ -n "${AZURE_SUBSCRIPTION_ID:-}" ]   && providers="$providers azure"
+        export STACKQL_AUDIT_PROVIDERS="${providers# }"
+        echo "::notice::providers: ${STACKQL_AUDIT_PROVIDERS:-(none)}"
         python3 -m pip install --quiet -r "${ACTION_PATH}/cicd/requirements.txt"
         python3 "${ACTION_PATH}/scripts/audit.py"
 

@@ -260,6 +260,9 @@ def fetch_bucket_detail(bucket: str, region: str, auth: str, log_dir: Path, budg
 
 
 def run_s3() -> int:
+    if not audit.provider_allowed("aws"):
+        print("::notice::skipping s3: aws not in STACKQL_AUDIT_PROVIDERS")
+        return 0
     region = os.environ.get("AWS_REGION", "").strip()
     if not region:
         print("::error::AWS_REGION is required for the S3 audit")
@@ -268,10 +271,7 @@ def run_s3() -> int:
     fail_on = os.environ.get("FAIL_ON_SEVERITY", "HIGH").upper()
     fail_threshold = audit.SEVERITY_ORDER.get(fail_on, 3)
 
-    auth, enabled = audit.build_auth()
-    if "aws" not in enabled:
-        print("::error::no AWS credentials supplied")
-        return 2
+    auth, _ = audit.build_auth()
 
     action_path = Path(os.environ.get("ACTION_PATH", "."))
     filters_mod = audit.load_filters_module(action_path)
@@ -360,6 +360,9 @@ def enumerate_regions(seed_region: str, auth: str, log_dir: Path, budget: Budget
 
 
 def run_aws_regions() -> int:
+    if not audit.provider_allowed("aws"):
+        print("::notice::skipping aws-regions: aws not in STACKQL_AUDIT_PROVIDERS")
+        return 0
     seed = os.environ.get("AWS_REGION", "").strip()
     if not seed:
         print("::error::AWS_REGION (a seed region to call DescribeRegions from) is required")
@@ -368,10 +371,7 @@ def run_aws_regions() -> int:
     fail_on = os.environ.get("FAIL_ON_SEVERITY", "HIGH").upper()
     fail_threshold = audit.SEVERITY_ORDER.get(fail_on, 3)
 
-    auth, enabled = audit.build_auth()
-    if "aws" not in enabled:
-        print("::error::no AWS credentials supplied")
-        return 2
+    auth, _ = audit.build_auth()
 
     action_path = Path(os.environ.get("ACTION_PATH", "."))
     filters_mod = audit.load_filters_module(action_path)
@@ -437,6 +437,9 @@ def descend_org(org_id: str, auth: str, log_dir: Path, budget: Budget) -> tuple[
 
 
 def run_gcp_org() -> int:
+    if not audit.provider_allowed("google"):
+        print("::notice::skipping gcp-org: google not in STACKQL_AUDIT_PROVIDERS")
+        return 0
     org_id = os.environ.get("GOOGLE_ORG_ID", "").strip()
     if not org_id:
         print("::error::GOOGLE_ORG_ID is required for the gcp-org audit")
@@ -445,10 +448,7 @@ def run_gcp_org() -> int:
     fail_on = os.environ.get("FAIL_ON_SEVERITY", "HIGH").upper()
     fail_threshold = audit.SEVERITY_ORDER.get(fail_on, 3)
 
-    auth, enabled = audit.build_auth()
-    if "google" not in enabled:
-        print("::error::no GCP credentials supplied")
-        return 2
+    auth, _ = audit.build_auth()
 
     action_path = Path(os.environ.get("ACTION_PATH", "."))
     filters_mod = audit.load_filters_module(action_path)
@@ -511,18 +511,15 @@ def list_all_subscriptions(auth: str, log_dir: Path, budget: Budget) -> tuple[li
 
 
 def run_azure_org() -> int:
+    if not audit.provider_allowed("azure"):
+        print("::notice::skipping azure-org: azure not in STACKQL_AUDIT_PROVIDERS")
+        return 0
     group_id = os.environ.get("AZURE_MGMT_GROUP", "").strip()
     parallel = max(1, int(os.environ.get("STACKQL_AZURE_PARALLEL", "8")))
     fail_on = os.environ.get("FAIL_ON_SEVERITY", "HIGH").upper()
     fail_threshold = audit.SEVERITY_ORDER.get(fail_on, 3)
 
-    # Unlike the shallow build_auth, we don't gate on a single subscription here —
-    # the point is to enumerate across them. azure_default reads the service
-    # principal env (AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET).
-    if not any(os.environ.get(k) for k in ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_SUBSCRIPTION_ID")):
-        print("::error::no Azure credentials supplied (set AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET)")
-        return 2
-    auth = json.dumps({"azure": {"type": "azure_default"}})
+    auth, _ = audit.build_auth()
 
     action_path = Path(os.environ.get("ACTION_PATH", "."))
     filters_mod = audit.load_filters_module(action_path)

@@ -34,7 +34,7 @@ jobs:
   deep-audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: stackql/stackql-audit-action/deep@v0.3
+      - uses: stackql/stackql-audit-action/actions/deep@v0.4
         with:
           target: s3 aws-regions gcp-org azure-org
           gcp-credentials: ${{ secrets.GCP_SA_JSON }}
