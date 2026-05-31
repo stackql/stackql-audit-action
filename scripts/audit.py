@@ -33,25 +33,43 @@ MAX_PARALLEL = int(os.environ.get("STACKQL_AUDIT_PARALLEL", "8"))
 
 
 def build_auth() -> tuple[str, set[str]]:
-    """Assemble a combined stackql --auth object from whatever creds are present.
+    """Return a stackql `--auth` payload, or empty string to use stackql's defaults.
 
-    One object can carry every provider at once, so a single `stackql exec`
-    covers all of them. Returns the JSON string plus the set of enabled
-    provider keys (a provider is enabled iff its creds were supplied).
+    If STACKQL_AUDIT_AUTH (raw JSON) or STACKQL_AUDIT_AUTH_FILE (path) is set,
+    that payload is used verbatim and its top-level keys are the enabled
+    providers. Otherwise no `--auth` is passed.
     """
-    auth: dict[str, dict] = {}
-    gcp_creds = os.environ.get("STACKQL_AUDIT_GCP_CREDS")
-    if gcp_creds:
-        auth["google"] = {"type": "service_account", "credentialsfilepath": gcp_creds}
-    if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
-        auth["aws"] = {
-            "type": "aws_signing_v4",
-            "keyIDenvvar": "AWS_ACCESS_KEY_ID",
-            "credentialsenvvar": "AWS_SECRET_ACCESS_KEY",
-        }
-    if os.environ.get("AZURE_SUBSCRIPTION_ID"):
-        auth["azure"] = {"type": "azure_default"}
-    return json.dumps(auth), set(auth.keys())
+    override = os.environ.get("STACKQL_AUDIT_AUTH")
+    if not override and os.environ.get("STACKQL_AUDIT_AUTH_FILE"):
+        try:
+            with open(os.environ["STACKQL_AUDIT_AUTH_FILE"]) as f:
+                override = f.read()
+        except OSError as e:
+            print(f"::error::STACKQL_AUDIT_AUTH_FILE could not be read: {e}")
+            return "", set()
+    if override:
+        try:
+            parsed = json.loads(override)
+        except json.JSONDecodeError as e:
+            print(f"::error::STACKQL_AUDIT_AUTH is not valid JSON: {e}")
+            return "", set()
+        if not isinstance(parsed, dict):
+            print("::error::STACKQL_AUDIT_AUTH must be a JSON object keyed by provider")
+            return "", set()
+        return json.dumps(parsed), set(parsed.keys())
+    return "", set()
+
+
+def provider_allowed(provider: str) -> bool:
+    """Honour STACKQL_AUDIT_PROVIDERS (space/comma separated). Empty/unset = no filter.
+
+    The caller (action/wrapper) is in the best position to know which providers
+    successfully authenticated; it sets this env so the script doesn't have to
+    guess from auth shapes."""
+    raw = os.environ.get("STACKQL_AUDIT_PROVIDERS", "").strip()
+    if not raw:
+        return True
+    return provider in set(raw.replace(",", " ").split())
 
 
 def scope_vars(provider: str) -> dict[str, str]:
@@ -66,12 +84,11 @@ def scope_vars(provider: str) -> dict[str, str]:
 
 
 def run_stackql(query: str, auth: str, log_path: Path) -> tuple[list[dict] | None, str | None, int]:
-    result = subprocess.run(
-        ["stackql", "exec", "--auth", auth, "--output", "json", query],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    argv = ["stackql", "exec"]
+    if auth:
+        argv += ["--auth", auth]
+    argv += ["--output", "json", query]
+    result = subprocess.run(argv, capture_output=True, text=True, check=False)
     rc = result.returncode
     stderr = result.stderr.strip()
     # Always write the per-invocation log, even on exit 0: a query that returns
@@ -180,10 +197,7 @@ def render_error(check: dict, err: str) -> str:
 def main() -> int:
     fail_on = os.environ.get("FAIL_ON_SEVERITY", "HIGH").upper()
     fail_threshold = SEVERITY_ORDER.get(fail_on, 3)
-    auth, enabled = build_auth()
-    if not enabled:
-        print("::error::no provider credentials supplied (set GCP, AWS, or Azure creds)")
-        return 2
+    auth, _ = build_auth()
 
     action_path = Path(os.environ["ACTION_PATH"])
     qp = os.environ.get("QUERIES_PATH", "").strip()
@@ -200,11 +214,13 @@ def main() -> int:
     log_dir = log_root / run_stamp
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    # Discover checks under queries/<provider>/, but only for enabled providers.
+    # Walk every queries/<provider>/ that exists; stackql defaults / the auth
+    # override decide what actually authenticates.
     checks: list[dict] = []
-    for provider in sorted(enabled):
-        pdir = queries_root / provider
-        if not pdir.is_dir():
+    for pdir in sorted(p for p in queries_root.iterdir() if p.is_dir()):
+        provider = pdir.name
+        if not provider_allowed(provider):
+            print(f"::notice::skipping {provider}: not in STACKQL_AUDIT_PROVIDERS")
             continue
         for cf in sorted(list(pdir.glob("*.yaml")) + list(pdir.glob("*.yml"))):
             with cf.open() as f:
@@ -214,7 +230,7 @@ def main() -> int:
             checks.append(check)
 
     if not checks:
-        print(f"::warning::no checks found for enabled providers {sorted(enabled)} in {queries_root}")
+        print(f"::warning::no checks found in {queries_root}")
         return 0
 
     results: dict[str, dict] = {}
@@ -280,7 +296,7 @@ def main() -> int:
     out_lines: list[str] = []
     out_lines.append("# StackQL Cloud Audit")
     out_lines.append(
-        f"**Providers:** {', '.join(sorted(enabled))}  ·  **Checks run:** {len(checks)}"
+        f"**Providers:** {', '.join(sorted({c['_provider'] for c in checks}))}  ·  **Checks run:** {len(checks)}"
         f"  ·  **Errors:** {error_count}  ·  **Non-zero exits:** {len(nonzero)}"
     )
     out_lines.append("")

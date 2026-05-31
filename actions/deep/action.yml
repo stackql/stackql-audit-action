@@ -172,9 +172,15 @@ runs:
         TARGETS: ${{ inputs.target }}
       run: |
         set -uo pipefail
-        ACTION_PATH="$(cd "${{ github.action_path }}/.." && pwd)"   # repo root (deep/ is a subdir)
+        ACTION_PATH="$(cd "${{ github.action_path }}/../.." && pwd)"   # repo root (actions/deep/ is two subdirs)
         export ACTION_PATH
         export RUN_STAMP="$(date +%s)"
+        providers=""
+        [ -n "${STACKQL_AUDIT_GCP_CREDS:-}" ] && providers="$providers google"
+        [ -n "${AWS_ACCESS_KEY_ID:-}" ]       && providers="$providers aws"
+        [ -n "${AZURE_TENANT_ID:-}" ]         && providers="$providers azure"
+        export STACKQL_AUDIT_PROVIDERS="${providers# }"
+        echo "::notice::authenticated providers: ${STACKQL_AUDIT_PROVIDERS:-(none)}"
         python3 -m pip install --quiet -r "${ACTION_PATH}/cicd/requirements.txt"
         for t in $TARGETS; do
           echo "::group::deep: $t"
