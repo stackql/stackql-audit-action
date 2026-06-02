@@ -7,9 +7,9 @@ branding:
 
 inputs:
   target:
-    description: 'Space-separated deep targets: s3 aws-regions gcp-org azure-org'
+    description: 'Space-separated deep targets: s3 aws-regions gcp-org azure-org entra'
     required: false
-    default: 's3 aws-regions gcp-org azure-org'
+    default: 's3 aws-regions gcp-org azure-org entra'
 
   # --- GCP (gcp-org) ---
   gcp-workload-identity-provider:
@@ -68,6 +68,11 @@ inputs:
     description: 'stackql Azure provider version (blank = latest).'
     required: false
     default: 'v24.10.00267'
+  # entra (entra_id) rides on the federated Azure login above; no extra credentials.
+  entra-id-provider-version:
+    description: 'stackql entra_id provider version (blank = v26.06.00405).'
+    required: false
+    default: 'v26.06.00405'
 
   # --- Budget (deep only; -1 = unlimited) ---
   max-nodes:
@@ -160,6 +165,7 @@ runs:
         GOOGLE_VER: ${{ inputs.google-provider-version }}
         AWS_VER: ${{ inputs.aws-provider-version }}
         AZURE_VER: ${{ inputs.azure-provider-version }}
+        ENTRA_VER: ${{ inputs.entra-id-provider-version }}
         AWS_AUTH_OK: ${{ steps.aws_auth.outcome == 'success' }}
         GCP_AUTH_OK: ${{ steps.gcp_auth.outcome == 'success' }}
         AZURE_AUTH_OK: ${{ steps.azure_auth.outcome == 'success' }}
@@ -169,6 +175,7 @@ runs:
         [ "$AWS_AUTH_OK" = "true" ]   && pull aws    "$AWS_VER"
         [ "$GCP_AUTH_OK" = "true" ]   && pull google "$GOOGLE_VER"
         [ "$AZURE_AUTH_OK" = "true" ] && pull azure  "$AZURE_VER"
+        [ "$AZURE_AUTH_OK" = "true" ] && pull entra_id "$ENTRA_VER"
         true
 
     - name: Run deep audits
@@ -201,7 +208,7 @@ runs:
         providers=""
         [ "$AWS_AUTH_OK" = "true" ]   && providers="$providers aws"
         [ "$GCP_AUTH_OK" = "true" ]   && providers="$providers google"
-        [ "$AZURE_AUTH_OK" = "true" ] && providers="$providers azure"
+        [ "$AZURE_AUTH_OK" = "true" ] && providers="$providers azure entra_id"
         export STACKQL_AUDIT_PROVIDERS="${providers# }"
         # GCP WIF gives an access token — point stackql at it as a bearer.
         if [ "$GCP_AUTH_OK" = "true" ]; then

@@ -7,9 +7,9 @@ branding:
 
 inputs:
   target:
-    description: 'Space-separated deep targets: s3 aws-regions gcp-org azure-org'
+    description: 'Space-separated deep targets: s3 aws-regions gcp-org azure-org entra'
     required: false
-    default: 's3 aws-regions gcp-org azure-org'
+    default: 's3 aws-regions gcp-org azure-org entra'
 
   # --- GCP (gcp-org) ---
   gcp-credentials:
@@ -64,6 +64,11 @@ inputs:
     description: 'stackql Azure provider version (blank = latest).'
     required: false
     default: 'v24.10.00267'
+  # entra (entra_id) reuses the Azure service principal above; runs when Azure does.
+  entra-id-provider-version:
+    description: 'stackql entra_id provider version (blank = v26.06.00405).'
+    required: false
+    default: 'v26.06.00405'
 
   # --- Budget (deep only; -1 = unlimited) ---
   max-nodes:
@@ -129,12 +134,14 @@ runs:
         GOOGLE_VER: ${{ inputs.google-provider-version }}
         AWS_VER: ${{ inputs.aws-provider-version }}
         AZURE_VER: ${{ inputs.azure-provider-version }}
+        ENTRA_VER: ${{ inputs.entra-id-provider-version }}
       run: |
         set -euo pipefail
         pull() { local p="$1" v="$2"; if [ -n "$v" ]; then stackql exec "registry pull $p $v;"; else stackql exec "registry pull $p;"; fi; }
         [ -n "$GCP_CREDS" ]    && pull google "$GOOGLE_VER"
         [ -n "$AWS_KEY" ]      && pull aws "$AWS_VER"
         [ -n "$AZURE_TENANT" ] && pull azure "$AZURE_VER"
+        [ -n "$AZURE_TENANT" ] && pull entra_id "$ENTRA_VER"
         true
 
     - name: Write GCP credentials
@@ -178,7 +185,7 @@ runs:
         providers=""
         [ -n "${STACKQL_AUDIT_GCP_CREDS:-}" ] && providers="$providers google"
         [ -n "${AWS_ACCESS_KEY_ID:-}" ]       && providers="$providers aws"
-        [ -n "${AZURE_TENANT_ID:-}" ]         && providers="$providers azure"
+        [ -n "${AZURE_TENANT_ID:-}" ]         && providers="$providers azure entra_id"
         export STACKQL_AUDIT_PROVIDERS="${providers# }"
         echo "::notice::authenticated providers: ${STACKQL_AUDIT_PROVIDERS:-(none)}"
         python3 -m pip install --quiet -r "${ACTION_PATH}/cicd/requirements.txt"

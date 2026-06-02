@@ -1,0 +1,19 @@
+id: entra-user-stale-signin
+name: Enabled accounts with stale or no sign-in activity
+severity: MEDIUM
+description: |
+  Enabled directory accounts that have not signed in interactively within the
+  last 90 days, or that have no recorded sign-in at all. Dormant-but-enabled
+  accounts are prime targets for takeover and should be reviewed or disabled.
+remediation: |
+  Confirm the account is still needed. If not, disable it (set accountEnabled
+  to false via entra_id.users.users update) or remove it with
+  DELETE FROM entra_id.users.users.
+query: |
+  SELECT userPrincipalName, displayName, accountEnabled, signInActivity
+  FROM entra_id.users.users
+filter: entra_stale_users
+filter_args:
+  max_age_days: 90
+  include_never: true
+columns: [userPrincipalName, displayName, last_sign_in]

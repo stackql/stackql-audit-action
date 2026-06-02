@@ -59,6 +59,12 @@ inputs:
     description: 'Version of the Azure provider to pull (blank = v24.10.00267).'
     required: false
     default: 'v24.10.00267'
+  # entra_id reuses the Azure service principal above (no extra credentials);
+  # it runs whenever Azure does.
+  entra-id-provider-version:
+    description: 'Version of the entra_id provider to pull (blank = v26.06.00405).'
+    required: false
+    default: 'v26.06.00405'
 
   # --- Common ---
   queries-path:
@@ -140,6 +146,7 @@ runs:
         GOOGLE_VER: ${{ inputs.google-provider-version }}
         AWS_VER: ${{ inputs.aws-provider-version }}
         AZURE_VER: ${{ inputs.azure-provider-version }}
+        ENTRA_VER: ${{ inputs.entra-id-provider-version }}
       run: |
         set -euo pipefail
         log="${RUNNER_TEMP}/stackql-registry-pull.log"
@@ -155,6 +162,7 @@ runs:
           [ -n "$GCP_CREDS" ]  && pull google "$GOOGLE_VER"
           [ -n "$AWS_KEY" ]    && pull aws "$AWS_VER"
           [ -n "$AZURE_SUB" ]  && pull azure "$AZURE_VER"
+          [ -n "$AZURE_SUB" ]  && pull entra_id "$ENTRA_VER"
           true
         } 2>&1 | tee "$log"
 
@@ -190,7 +198,7 @@ runs:
         providers=""
         [ -n "${STACKQL_AUDIT_GCP_CREDS:-}" ] && providers="$providers google"
         [ -n "${AWS_ACCESS_KEY_ID:-}" ]       && providers="$providers aws"
-        [ -n "${AZURE_SUBSCRIPTION_ID:-}" ]   && providers="$providers azure"
+        [ -n "${AZURE_SUBSCRIPTION_ID:-}" ]   && providers="$providers azure entra_id"
         export STACKQL_AUDIT_PROVIDERS="${providers# }"
         echo "::notice::providers: ${STACKQL_AUDIT_PROVIDERS:-(none)}"
         python3 -m pip install --quiet -r "${ACTION_PATH}/cicd/requirements.txt"

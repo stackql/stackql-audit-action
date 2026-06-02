@@ -8,6 +8,8 @@ reported as findings.
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
@@ -293,4 +295,119 @@ def s3_acls_enabled(rows: list[dict]) -> list[dict]:
         ownerships = [_coerce_dict(r).get("ObjectOwnership") for r in rules]
         if not ownerships or any(o != "BucketOwnerEnforced" for o in ownerships):
             matches.append(row)
+    return matches
+
+
+# --- Entra ID (Microsoft Graph) ------------------------------------------
+# Graph returns ISO8601 timestamps (e.g. "2025-01-02T03:04:05Z", sometimes with
+# 7-digit fractional seconds Python's fromisoformat won't accept). _parse_graph_dt
+# normalises both. "now" is the audit run time — good enough for age/expiry checks.
+
+def _parse_graph_dt(val: Any) -> datetime | None:
+    if not isinstance(val, str) or not val.strip():
+        return None
+    s = re.sub(r"\.\d+", "", val.strip().replace("Z", "+00:00"))
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def entra_credential_hygiene(
+    rows: list[dict], *, expiry_window_days: int = 30, max_lifetime_days: int = 365
+) -> list[dict]:
+    """Flag applications / service principals whose password or key credentials are
+    expired, expiring within expiry_window_days, or longer-lived than max_lifetime_days.
+
+    Reused by both the app and service-principal checks — both expose
+    passwordCredentials / keyCredentials arrays of the same shape. Each match gains a
+    `credential_issues` column summarising the offending credentials."""
+    now = _now()
+    soon = now + timedelta(days=expiry_window_days)
+    matches: list[dict] = []
+    for row in rows:
+        issues: list[str] = []
+        for kind, col in (("password", "passwordCredentials"), ("key", "keyCredentials")):
+            for raw in _coerce_list(row.get(col)):
+                cred = _coerce_dict(raw)
+                end = _parse_graph_dt(cred.get("endDateTime"))
+                if end is None:
+                    continue
+                label = cred.get("displayName") or cred.get("keyId") or "(unnamed)"
+                if end < now:
+                    issues.append(f"{kind}:{label}:expired")
+                elif end < soon:
+                    issues.append(f"{kind}:{label}:expiring<{expiry_window_days}d")
+                else:
+                    start = _parse_graph_dt(cred.get("startDateTime"))
+                    if start and (end - start).days > max_lifetime_days:
+                        issues.append(f"{kind}:{label}:lifetime>{max_lifetime_days}d")
+        if issues:
+            matches.append({**row, "credential_issues": "; ".join(issues)})
+    return matches
+
+
+def entra_external_audience(rows: list[dict]) -> list[dict]:
+    """Flag app registrations whose sign-in audience extends beyond the home tenant
+    (anything other than AzureADMyOrg — i.e. multi-tenant or personal Microsoft accounts)."""
+    return [r for r in rows if (r.get("signInAudience") or "") not in ("", "AzureADMyOrg")]
+
+
+# Delegated Graph scopes broad enough that a tenant-wide (AllPrincipals) grant is
+# worth surfacing. Override per-check via filter_args.sensitive_scopes.
+_ENTRA_SENSITIVE_SCOPES = (
+    "Directory.Read.All", "Directory.ReadWrite.All",
+    "User.ReadWrite.All", "Group.ReadWrite.All", "GroupMember.ReadWrite.All",
+    "Mail.Read", "Mail.ReadWrite", "Mail.Send",
+    "Files.ReadWrite.All", "Sites.ReadWrite.All",
+    "Application.ReadWrite.All", "RoleManagement.ReadWrite.Directory",
+    "full_access_as_user",
+)
+
+
+def entra_oauth_tenant_wide_grants(
+    rows: list[dict], *, sensitive_scopes: list[str] | None = None
+) -> list[dict]:
+    """Flag OAuth2 delegated permission grants consented for ALL users
+    (consentType=AllPrincipals) that include a sensitive scope. Each match gains a
+    `sensitive_scopes` column listing the scopes that tripped it."""
+    sens = set(sensitive_scopes) if sensitive_scopes else set(_ENTRA_SENSITIVE_SCOPES)
+    matches: list[dict] = []
+    for row in rows:
+        if (row.get("consentType") or "") != "AllPrincipals":
+            continue
+        hit = [s for s in (row.get("scope") or "").split() if s in sens]
+        if hit:
+            matches.append({**row, "sensitive_scopes": " ".join(hit)})
+    return matches
+
+
+def entra_guest_users(rows: list[dict]) -> list[dict]:
+    """Flag external (guest) directory accounts."""
+    return [r for r in rows if (r.get("userType") or "") == "Guest"]
+
+
+def entra_stale_users(
+    rows: list[dict], *, max_age_days: int = 90, include_never: bool = True
+) -> list[dict]:
+    """Flag enabled accounts that haven't signed in within max_age_days (and, when
+    include_never is set, accounts with no recorded interactive sign-in). Each match
+    gains a `last_sign_in` column ('never' or a date)."""
+    now = _now()
+    matches: list[dict] = []
+    for row in rows:
+        if row.get("accountEnabled") is False:
+            continue
+        last = _parse_graph_dt(_coerce_dict(row.get("signInActivity")).get("lastSignInDateTime"))
+        if last is None:
+            if include_never:
+                matches.append({**row, "last_sign_in": "never"})
+            continue
+        if (now - last).days > max_age_days:
+            matches.append({**row, "last_sign_in": last.date().isoformat()})
     return matches

@@ -1,0 +1,16 @@
+id: entra-user-guest-accounts
+name: Guest (external) user accounts
+severity: LOW
+description: |
+  External guest accounts in the directory. Guests are legitimate for B2B
+  collaboration, but each one is an external identity with standing access —
+  worth reviewing for accounts that are stale, over-permissioned, or forgotten.
+remediation: |
+  Review each guest against current need. Remove unneeded accounts with
+  DELETE FROM entra_id.users.users, and constrain guest capability via the
+  tenant authorization policy (guestUserRoleId / allowInvitesFrom).
+query: |
+  SELECT userPrincipalName, displayName, userType, accountEnabled
+  FROM entra_id.users.users
+filter: entra_guest_users
+columns: [userPrincipalName, displayName, accountEnabled]

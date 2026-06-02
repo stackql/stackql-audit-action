@@ -7,6 +7,8 @@ Targets (positional arg, or DISCOVER_TARGET):
   aws-regions — enumerate enabled regions, run queries/aws/ per region.
   gcp-org     — descend an org's folders to ACTIVE projects, run queries/google/.
   azure-org   — descend a management group's subscriptions, run queries/azure/.
+  entra       — Entra ID is tenant-global: run queries/entra_id/ once, flat (no
+                enumeration/descent).
 
 All deep targets share one path: enumerate scopes -> run the existing checks per
 scope under a Budget (org-nodes / queries / wall-clock; -1 = unlimited), with
@@ -552,11 +554,73 @@ def run_azure_org() -> int:
                             log_dir, fail_on, fail_threshold)
 
 
+# --- target: Entra ID (tenant-global, no enumeration) -----------------------
+
+def run_entra() -> int:
+    """Run queries/entra_id/ once against the tenant. Entra is tenant-global —
+    there are no scopes to enumerate/descend — so this is a flat sweep, not a
+    fan-out. Shares the same report/stream/budget machinery as the other targets."""
+    if not audit.provider_allowed("entra_id"):
+        print("::notice::skipping entra: entra_id not in STACKQL_AUDIT_PROVIDERS")
+        return 0
+    fail_on = os.environ.get("FAIL_ON_SEVERITY", "HIGH").upper()
+    fail_threshold = audit.SEVERITY_ORDER.get(fail_on, 3)
+
+    auth, _ = audit.build_auth()
+
+    action_path = Path(os.environ.get("ACTION_PATH", "."))
+    filters_mod = audit.load_filters_module(action_path)
+    log_dir = _setup_log_dir()
+    checks = load_checks(action_path, "entra_id", "entra_id")
+    if not checks:
+        print("::warning::no entra checks found in queries/entra_id/")
+        return 0
+
+    budget = Budget.from_env(os.environ)
+    print(f"::notice::deep audit budget: {budget.describe_limits()}")
+
+    findings: dict[str, list[dict]] = {c["_file"]: [] for c in checks}
+    stream_path = Path(os.environ.get("STACKQL_AUDIT_STREAM") or (log_dir / "entra-findings.jsonl"))
+    print(f"::notice::streaming findings to {stream_path}")
+    stopped_reason: str | None = None
+    with open(stream_path, "a", buffering=1) as stream:
+        for c in checks:
+            stopped_reason = budget.should_stop()
+            if stopped_reason:
+                print(f"::warning::deep audit stopping early — {stopped_reason}; analyzing partial results")
+                break
+            budget.add_query()
+            log = log_dir / f"entra__{c['_file'].replace('/', '_')}.log"
+            rows, err, _ = audit.run_stackql(c["query"], auth, log)
+            if err:
+                print(f"::warning::entra check {c['_file']} errored: {err.splitlines()[0]}")
+                continue
+            if c.get("filter"):
+                try:
+                    rows = audit.apply_filter(filters_mod, c["filter"], rows or [], c.get("filter_args"))
+                except Exception as e:
+                    print(f"::warning::filter {c['filter']} errored: {e}")
+                    continue
+            if rows:
+                findings[c["_file"]] = rows
+                sev = c.get("severity", "MEDIUM").upper()
+                for r in rows:
+                    stream.write(json.dumps({"check": c["_file"], "name": c["name"], "severity": sev}) + "\n")
+
+    header = [
+        f"**Scope:** tenant-global  ·  **Checks:** {len(checks)}",
+        _budget_line(budget, stopped_reason, 0),
+    ]
+    return _finalize_report("# StackQL Entra ID Audit", header, checks, findings, None,
+                            log_dir, fail_on, fail_threshold)
+
+
 COMMANDS = {
     "s3": run_s3,
     "aws-regions": run_aws_regions,
     "gcp-org": run_gcp_org,
     "azure-org": run_azure_org,
+    "entra": run_entra,
 }
 
 

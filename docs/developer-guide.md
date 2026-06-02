@@ -71,5 +71,20 @@ select id, userPrincipalName from entra_id.users.users;
 
 select id, displayName, servicePrincipalType from entra_id.service_principals.service_principals; -- horrid slow rendering on select *
 
+
+SELECT appId, displayName, passwordCredentials, keyCredentials, signInAudience
+FROM entra_id.applications.applications;
+
+
+
+SELECT id, displayName, isEnabled
+FROM entra_id.policies.identity_security_defaults_enforcement_policy;
+
+
+SELECT displayName, allowedToSignUpEmailBasedSubscriptions, allowEmailVerifiedUsersToJoinOrganization,
+       allowUserConsentForRiskyApps, allowInvitesFrom, defaultUserRolePermissions, guestUserRoleId
+FROM entra_id.policies.authorization_policy;
+
+
 ```
 
