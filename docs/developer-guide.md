@@ -56,3 +56,35 @@ Every `stackql exec` writes a per-invocation log to
 stderr), plus an `index.log` listing each check's exit code. stderr is recorded
 even on exit 0 — the fastest way to spot a query that returns nothing
 unexpectedly. Override the location with `STACKQL_AUDIT_LOG_DIR`.
+
+## IAM 
+
+### entra_id
+
+These are useful basis queries:
+
+```sql
+
+select id, appId, displayName from entra_id.applications.applications;
+
+select id, userPrincipalName from entra_id.users.users;
+
+select id, displayName, servicePrincipalType from entra_id.service_principals.service_principals; -- horrid slow rendering on select *
+
+
+SELECT appId, displayName, passwordCredentials, keyCredentials, signInAudience
+FROM entra_id.applications.applications;
+
+
+
+SELECT id, displayName, isEnabled
+FROM entra_id.policies.identity_security_defaults_enforcement_policy;
+
+
+SELECT displayName, allowedToSignUpEmailBasedSubscriptions, allowEmailVerifiedUsersToJoinOrganization,
+       allowUserConsentForRiskyApps, allowInvitesFrom, defaultUserRolePermissions, guestUserRoleId
+FROM entra_id.policies.authorization_policy;
+
+
+```
+
