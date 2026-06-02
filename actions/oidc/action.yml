@@ -151,13 +151,16 @@ runs:
 
     - name: ID Fed - login to Azure (OIDC)
       id: azure_auth
-      if: inputs.azure-client-id != '' && inputs.azure-tenant-id != '' && inputs.azure-subscription-id != ''
+      # Subscription is opt-in: azure-org without one enumerates all subscriptions,
+      # and entra (tenant-global Graph) needs none. Login only requires client+tenant.
+      if: inputs.azure-client-id != '' && inputs.azure-tenant-id != ''
       continue-on-error: true
       uses: azure/login@v2
       with:
         client-id: ${{ inputs.azure-client-id }}
         tenant-id: ${{ inputs.azure-tenant-id }}
         subscription-id: ${{ inputs.azure-subscription-id }}
+        allow-no-subscriptions: true
 
     - name: Pull stackql providers
       shell: bash
