@@ -199,20 +199,38 @@ runs:
         AWS_AUTH_OK: ${{ steps.aws_auth.outcome == 'success' }}
         GCP_AUTH_OK: ${{ steps.gcp_auth.outcome == 'success' }}
         AZURE_AUTH_OK: ${{ steps.azure_auth.outcome == 'success' }}
+        AWS_AUTH_OUTCOME: ${{ steps.aws_auth.outcome }}
+        GCP_AUTH_OUTCOME: ${{ steps.gcp_auth.outcome }}
+        AZURE_AUTH_OUTCOME: ${{ steps.azure_auth.outcome }}
         GCP_ACCESS_TOKEN: ${{ steps.gcp_auth.outputs.access_token }}
       run: |
         set -uo pipefail
         ACTION_PATH="$(cd "${{ github.action_path }}/../.." && pwd)"   # repo root (actions/oidc/ is two subdirs)
         export ACTION_PATH
         export RUN_STAMP="$(date +%s)"
+        # Surface each federated-login step's result (success/failure/skipped) — the
+        # auth steps are continue-on-error, so without this a failed login is silent
+        # and the only symptom is a provider missing from the list below.
+        echo "::notice::ID-fed login outcomes — aws=${AWS_AUTH_OUTCOME:-?} gcp=${GCP_AUTH_OUTCOME:-?} azure=${AZURE_AUTH_OUTCOME:-?}"
+        [ "$AZURE_AUTH_OK" != "true" ] && echo "::warning::Azure federated login did not succeed (outcome=${AZURE_AUTH_OUTCOME:-?}) — azure + entra_id excluded. Open the 'ID Fed - login to Azure (OIDC)' step to see the error (usually a federated-credential subject mismatch)."
         providers=""
         [ "$AWS_AUTH_OK" = "true" ]   && providers="$providers aws"
         [ "$GCP_AUTH_OK" = "true" ]   && providers="$providers google"
         [ "$AZURE_AUTH_OK" = "true" ] && providers="$providers azure entra_id"
         export STACKQL_AUDIT_PROVIDERS="${providers# }"
-        # GCP WIF gives an access token — point stackql at it as a bearer.
-        if [ "$GCP_AUTH_OK" = "true" ]; then
-          export STACKQL_AUDIT_AUTH='{"google":{"type":"bearer","credentialsenvvar":"GCP_ACCESS_TOKEN"}}'
+        # Bridge each federated session to stackql as a bearer token — no secrets.
+        # azure and entra_id use the SAME flow: a token from the az CLI session
+        # azure/login established, differing only by audience (ARM vs Graph).
+        auth=()
+        [ "$GCP_AUTH_OK" = "true" ] && auth+=('"google":{"type":"bearer","credentialsenvvar":"GCP_ACCESS_TOKEN"}')
+        if [ "$AZURE_AUTH_OK" = "true" ]; then
+          export AZURE_ARM_TOKEN="$(az account get-access-token --resource https://management.azure.com/ --query accessToken -o tsv)"
+          export AZURE_GRAPH_TOKEN="$(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv)"
+          auth+=('"azure":{"type":"bearer","credentialsenvvar":"AZURE_ARM_TOKEN"}')
+          auth+=('"entra_id":{"type":"bearer","credentialsenvvar":"AZURE_GRAPH_TOKEN"}')
+        fi
+        if [ "${#auth[@]}" -gt 0 ]; then
+          IFS=','; export STACKQL_AUDIT_AUTH="{${auth[*]}}"; unset IFS
         fi
         echo "::notice::authenticated providers: ${STACKQL_AUDIT_PROVIDERS:-(none)}"
         python3 -m pip install --quiet -r "${ACTION_PATH}/cicd/requirements.txt"
