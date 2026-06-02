@@ -59,17 +59,17 @@ unexpectedly. Override the location with `STACKQL_AUDIT_LOG_DIR`.
 
 ## IAM 
 
-### entraid
+### entra_id
 
 These are useful basis queries:
 
 ```sql
 
-select id, appId, displayName from entraid.applications.applications;
+select id, appId, displayName from entra_id.applications.applications;
 
-select id, userPrincipalName from entraid.users.users;
+select id, userPrincipalName from entra_id.users.users;
 
-select id, displayName, servicePrincipalType from entraid.service_principals.service_principals; -- horrid slow rendering on select *
+select id, displayName, servicePrincipalType from entra_id.service_principals.service_principals; -- horrid slow rendering on select *
 
 ```
 
