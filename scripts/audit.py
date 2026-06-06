@@ -214,6 +214,15 @@ def main() -> int:
     log_dir = log_root / run_stamp
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    # Per-run data-stream dir for *-findings.jsonl, kept separate from the .log
+    # files. Falls back to the log dir when STACKQL_AUDIT_STREAM_DIR is unset so
+    # local runs are unchanged; the actions point it at a dedicated folder.
+    stream_root = Path(os.environ.get("STACKQL_AUDIT_STREAM_DIR")
+                       or os.environ.get("STACKQL_AUDIT_LOG_DIR")
+                       or (action_path / "cicd" / "log"))
+    stream_dir = stream_root / run_stamp
+    stream_dir.mkdir(parents=True, exist_ok=True)
+
     # Walk every queries/<provider>/ that exists; stackql defaults / the auth
     # override decide what actually authenticates.
     checks: list[dict] = []
@@ -273,6 +282,7 @@ def main() -> int:
     highest_severity = "NONE"
     error_count = 0
     sections: list[str] = []
+    streams: dict[str, list[dict]] = {}  # provider -> finding records (JSONL)
 
     for c in checks:
         r = results[c["_file"]]
@@ -291,7 +301,25 @@ def main() -> int:
         total_findings += len(rows)
         if SEVERITY_ORDER[sev] > SEVERITY_ORDER[highest_severity]:
             highest_severity = sev
+        for row in rows:
+            streams.setdefault(check["_provider"], []).append({
+                "provider": check["_provider"],
+                "check": check["_file"],
+                "name": check.get("name"),
+                "severity": sev,
+                "fields": row,
+            })
         sections.append(render_findings(check, rows))
+
+    # Stream findings as per-provider NDJSON (one file per provider), separate
+    # from the .log files — the actions upload/merge this folder on its own.
+    for prov, recs in streams.items():
+        try:
+            with open(stream_dir / f"{prov}-findings.jsonl", "a", buffering=1) as sf:
+                for rec in recs:
+                    sf.write(json.dumps(rec, default=str) + "\n")
+        except OSError as e:
+            print(f"::warning::could not write {prov} stream: {e}")
 
     out_lines: list[str] = []
     out_lines.append("# StackQL Cloud Audit")

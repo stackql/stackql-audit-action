@@ -80,11 +80,15 @@ inputs:
     required: false
     default: 'latest'
   upload-logs:
-    description: 'Upload per-invocation stackql logs (cicd/log) as a workflow artifact named "stackql-audit-logs". Useful for debugging empty/odd results.'
+    description: 'Upload the per-invocation .log files (stackql-audit-logs) and the per-provider JSONL data streams (stackql-audit-data-streams) as workflow artifacts. Useful for debugging empty/odd results.'
     required: false
     default: 'false'
+  merge-data-streams:
+    description: 'Merge all *-findings.jsonl into one summary.json (keyed by provider) at the end. Blank = on whenever upload-logs is true; set "true"/"false" to force.'
+    required: false
+    default: ''
   log-retention-days:
-    description: 'Retention in days for the uploaded logs artifact (0 = repository default). Integer in [0, 90]. Only used when upload-logs is true.'
+    description: 'Retention in days for the uploaded artifacts (0 = repository default). Integer in [0, 90]. Only used when upload-logs is true.'
     required: false
     default: '0'
 
@@ -193,8 +197,11 @@ runs:
         QUERIES_PATH: ${{ inputs.queries-path }}
         FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
         ACTION_PATH: ${{ github.action_path }}
+        STACKQL_AUDIT_LOG_DIR: ${{ github.workspace }}/audit-log
+        STACKQL_AUDIT_STREAM_DIR: ${{ github.workspace }}/audit-data-streams
       run: |
         set -euo pipefail
+        export RUN_STAMP="$(date +%s)"
         providers=""
         [ -n "${STACKQL_AUDIT_GCP_CREDS:-}" ] && providers="$providers google"
         [ -n "${AWS_ACCESS_KEY_ID:-}" ]       && providers="$providers aws"
@@ -203,6 +210,17 @@ runs:
         echo "::notice::providers: ${STACKQL_AUDIT_PROVIDERS:-(none)}"
         python3 -m pip install --quiet -r "${ACTION_PATH}/cicd/requirements.txt"
         python3 "${ACTION_PATH}/scripts/audit.py"
+        # hand the run's stream dir to the merge/upload steps
+        echo "STACKQL_STREAM_RUN_DIR=${STACKQL_AUDIT_STREAM_DIR}/${RUN_STAMP}" >> "$GITHUB_ENV"
+
+    - name: Merge data streams
+      # On by default when uploads are on; force with merge-data-streams true/false.
+      if: ${{ always() && (inputs.merge-data-streams == 'true' || (inputs.merge-data-streams == '' && inputs.upload-logs == 'true')) }}
+      shell: bash
+      run: |
+        set -uo pipefail
+        python3 "${{ github.action_path }}/scripts/merge_streams.py" \
+          "${STACKQL_STREAM_RUN_DIR:-${{ github.workspace }}/audit-data-streams}"
 
     - name: Upload stackql logs
       # always() so logs upload even when the audit fails on findings (exit 1)
@@ -210,6 +228,15 @@ runs:
       uses: actions/upload-artifact@v4
       with:
         name: stackql-audit-logs
-        path: ${{ github.action_path }}/cicd/log/
+        path: ${{ github.workspace }}/audit-log/
+        if-no-files-found: ignore
+        retention-days: ${{ inputs.log-retention-days }}
+
+    - name: Upload stackql data streams
+      if: ${{ always() && inputs.upload-logs == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: stackql-audit-data-streams
+        path: ${{ github.workspace }}/audit-data-streams/
         if-no-files-found: ignore
         retention-days: ${{ inputs.log-retention-days }}
