@@ -102,11 +102,15 @@ inputs:
     required: false
     default: 'latest'
   upload-logs:
-    description: 'Upload per-invocation logs + *-findings.jsonl as the deep-audit-logs artifact.'
+    description: 'Upload the per-invocation .log files (deep-audit-logs) and the JSONL data streams (deep-audit-data-streams) as artifacts.'
     required: false
     default: 'true'
+  merge-data-streams:
+    description: 'Merge all *-findings.jsonl into one summary.json (keyed by target) at the end. Blank = on whenever upload-logs is true; set "true"/"false" to force.'
+    required: false
+    default: ''
   log-retention-days:
-    description: 'Retention (days) for the logs artifact (0 = repo default).'
+    description: 'Retention (days) for the uploaded artifacts (0 = repo default).'
     required: false
     default: '0'
 
@@ -198,6 +202,7 @@ runs:
         STACKQL_GCP_PARALLEL: ${{ inputs.parallel }}
         STACKQL_AZURE_PARALLEL: ${{ inputs.parallel }}
         STACKQL_AUDIT_LOG_DIR: ${{ github.workspace }}/deep-audit-log
+        STACKQL_AUDIT_STREAM_DIR: ${{ github.workspace }}/deep-audit-data-streams
         TARGETS: ${{ inputs.target }}
         AWS_AUTH_OK: ${{ steps.aws_auth.outcome == 'success' }}
         GCP_AUTH_OK: ${{ steps.gcp_auth.outcome == 'success' }}
@@ -242,12 +247,33 @@ runs:
           python3 "${ACTION_PATH}/scripts/discover.py" "$t" || echo "::warning::deep target '$t' exited non-zero"
           echo "::endgroup::"
         done
+        # hand the run's stream dir to the merge/upload steps
+        echo "STACKQL_STREAM_RUN_DIR=${STACKQL_AUDIT_STREAM_DIR}/${RUN_STAMP}" >> "$GITHUB_ENV"
 
-    - name: Upload logs + findings
+    - name: Merge data streams
+      # On by default when uploads are on; force with merge-data-streams true/false.
+      if: ${{ always() && (inputs.merge-data-streams == 'true' || (inputs.merge-data-streams == '' && inputs.upload-logs == 'true')) }}
+      shell: bash
+      run: |
+        set -uo pipefail
+        ACTION_PATH="$(cd "${{ github.action_path }}/../.." && pwd)"
+        python3 "${ACTION_PATH}/scripts/merge_streams.py" \
+          "${STACKQL_STREAM_RUN_DIR:-${{ github.workspace }}/deep-audit-data-streams}"
+
+    - name: Upload logs
       if: ${{ always() && inputs.upload-logs == 'true' }}
       uses: actions/upload-artifact@v4
       with:
         name: deep-audit-logs
         path: ${{ github.workspace }}/deep-audit-log/
+        if-no-files-found: ignore
+        retention-days: ${{ inputs.log-retention-days }}
+
+    - name: Upload data streams
+      if: ${{ always() && inputs.upload-logs == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: deep-audit-data-streams
+        path: ${{ github.workspace }}/deep-audit-data-streams/
         if-no-files-found: ignore
         retention-days: ${{ inputs.log-retention-days }}

@@ -83,6 +83,21 @@ def _setup_log_dir() -> Path:
     return d
 
 
+def _setup_stream_dir() -> Path:
+    """Run-stamped directory for the *-findings.jsonl streams, kept separate from
+    the per-invocation .log files. Falls back to STACKQL_AUDIT_LOG_DIR (then
+    cicd/log) when STACKQL_AUDIT_STREAM_DIR is unset, so local runs are unchanged;
+    the deep/oidc actions point it at deep-audit-data-streams/."""
+    action_path = Path(os.environ.get("ACTION_PATH", "."))
+    run_stamp = os.environ.get("RUN_STAMP") or time.strftime("%Y%m%d-%H%M%S")
+    root = Path(os.environ.get("STACKQL_AUDIT_STREAM_DIR")
+                or os.environ.get("STACKQL_AUDIT_LOG_DIR")
+                or (action_path / "cicd" / "log"))
+    d = root / run_stamp
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def load_checks(action_path: Path, dirname: str, provider_tag: str) -> list[dict]:
     checks: list[dict] = []
     qdir = action_path / "queries" / dirname
@@ -194,7 +209,7 @@ def _scope_fanout(label: str, scope_var: str, scope_values: list[str], descent_s
                   parallel: int, stream_name: str):
     """Audit each scope in parallel; stream findings; return (findings, stopped_reason,
     skipped, audited)."""
-    stream_path = Path(os.environ.get("STACKQL_AUDIT_STREAM") or (log_dir / stream_name))
+    stream_path = Path(os.environ.get("STACKQL_AUDIT_STREAM") or (_setup_stream_dir() / stream_name))
     print(f"::notice::streaming findings to {stream_path}")
     findings: dict[str, list[dict]] = {c["_file"]: [] for c in checks}
     skipped = 0
@@ -289,7 +304,7 @@ def run_s3() -> int:
     buckets = list_bucket_names(region, auth, log_dir, budget)
     print(f"::notice::S3: {len(buckets)} bucket(s); fetching detail with {parallel} worker(s)")
 
-    stream_path = Path(os.environ.get("STACKQL_AUDIT_STREAM") or (log_dir / "s3-findings.jsonl"))
+    stream_path = Path(os.environ.get("STACKQL_AUDIT_STREAM") or (_setup_stream_dir() / "s3-findings.jsonl"))
     print(f"::notice::streaming findings to {stream_path}")
 
     findings: dict[str, list[dict]] = {c["_file"]: [] for c in checks}
@@ -580,7 +595,7 @@ def run_entra() -> int:
     print(f"::notice::deep audit budget: {budget.describe_limits()}")
 
     findings: dict[str, list[dict]] = {c["_file"]: [] for c in checks}
-    stream_path = Path(os.environ.get("STACKQL_AUDIT_STREAM") or (log_dir / "entra-findings.jsonl"))
+    stream_path = Path(os.environ.get("STACKQL_AUDIT_STREAM") or (_setup_stream_dir() / "entra-findings.jsonl"))
     print(f"::notice::streaming findings to {stream_path}")
     stopped_reason: str | None = None
     with open(stream_path, "a", buffering=1) as stream:

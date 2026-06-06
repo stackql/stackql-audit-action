@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stackql.io/schemas/audit-payload.schema.json",
+  "title": "StackQL Audit Payload",
+  "description": "Canonical run report emitted by scripts/publish.py and POSTed to a reporting backend (run-report.json). One document per audit run.",
+  "type": "object",
+  "required": ["run_id", "generated_at", "tool", "summary", "findings"],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "description": "Stable id for the run (GitHub run id, RUN_STAMP, or a wall-clock stamp). Shared by every finding so dashboards can dedupe re-runs."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp the report was generated (ISO 8601, e.g. 2026-06-02T23:33:35Z)."
+    },
+    "tool": {
+      "type": "string",
+      "const": "stackql-audit"
+    },
+    "target": {
+      "type": "string",
+      "description": "Deep target this report was produced for (e.g. s3, aws-regions, gcp-org, azure-org, entra). Absent for aggregated multi-target reports."
+    },
+    "summary": {
+      "type": "object",
+      "required": ["by_severity", "total", "highest"],
+      "additionalProperties": false,
+      "properties": {
+        "by_severity": {
+          "type": "object",
+          "required": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+          "additionalProperties": false,
+          "properties": {
+            "CRITICAL": { "type": "integer", "minimum": 0 },
+            "HIGH": { "type": "integer", "minimum": 0 },
+            "MEDIUM": { "type": "integer", "minimum": 0 },
+            "LOW": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of findings in this report."
+        },
+        "highest": {
+          "type": "string",
+          "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE"],
+          "description": "Highest severity present, or NONE when there are no findings."
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    }
+  },
+  "$defs": {
+    "severity": {
+      "type": "string",
+      "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+    },
+    "finding": {
+      "type": "object",
+      "required": ["run_id", "ts", "tool", "target", "severity", "fields"],
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "description": "Run id this finding belongs to (matches the top-level run_id)."
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "description": "UTC timestamp the finding record was emitted."
+        },
+        "tool": {
+          "type": "string",
+          "const": "stackql-audit"
+        },
+        "target": {
+          "type": "string",
+          "description": "Deep target the finding came from (e.g. s3, aws-regions, gcp-org, azure-org, entra)."
+        },
+        "severity": { "$ref": "#/$defs/severity" },
+        "check_id": {
+          "type": ["string", "null"],
+          "description": "Identifier of the check (its YAML id, or the check file path)."
+        },
+        "check_name": {
+          "type": ["string", "null"],
+          "description": "Human-readable check name."
+        },
+        "fields": {
+          "type": "object",
+          "description": "The raw finding row from the audit stream, preserved verbatim. Keys vary by check/target (e.g. region, subscription, bucket, resource attributes).",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,71 @@
+name: 'StackQL Audit Publish'
+description: 'Publish audit findings to reporting/observability backends. Consumes the *-findings.jsonl an audit already produced; does not run an audit itself.'
+author: 'StackQL'
+branding:
+  icon: 'upload-cloud'
+  color: 'blue'
+
+inputs:
+  findings-path:
+    description: 'Directory containing the audit run output (searched recursively for *-findings.jsonl). For the deep/oidc actions this is the deep-audit-log dir; for the root action, cicd/log.'
+    required: true
+    default: ''
+  report-http-url:
+    description: 'If set, POST the canonical {run, summary, findings[]} JSON document to this URL (Content-Type: application/json).'
+    required: false
+    default: ''
+  report-token:
+    description: 'Optional bearer token for the reporting URL (sent as Authorization: Bearer). Pass via a workflow secret.'
+    required: false
+    default: ''
+  report-timeout-seconds:
+    description: 'Timeout for the reporting POST.'
+    required: false
+    default: '10'
+  s3-uri:
+    description: 'If set, copy the findings dir (NDJSON streams + run-report.json) to this s3:// destination. Requires AWS credentials already present in the job env (e.g. from an OIDC AWS login).'
+    required: false
+    default: ''
+
+outputs:
+  report-path:
+    description: 'Path to the written run-report.json'
+    value: ${{ steps.publish.outputs.report-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Build + post run report
+      id: publish
+      shell: bash
+      env:
+        PUBLISH_FINDINGS_DIR: ${{ inputs.findings-path }}
+        STACKQL_AUDIT_REPORT_URL: ${{ inputs.report-http-url }}
+        STACKQL_AUDIT_REPORT_TOKEN: ${{ inputs.report-token }}
+        STACKQL_AUDIT_REPORT_TIMEOUT: ${{ inputs.report-timeout-seconds }}
+      run: |
+        set -euo pipefail
+        ACTION_PATH="$(cd "${{ github.action_path }}/../.." && pwd)"   # repo root (actions/publish/ is two subdirs)
+        if [ ! -d "$PUBLISH_FINDINGS_DIR" ]; then
+          echo "::warning::findings-path '$PUBLISH_FINDINGS_DIR' not found — nothing to publish"
+          echo "report-path=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        python3 "${ACTION_PATH}/scripts/publish.py" "$PUBLISH_FINDINGS_DIR"
+        echo "report-path=${PUBLISH_FINDINGS_DIR%/}/run-report.json" >> "$GITHUB_OUTPUT"
+
+    - name: Sync findings to S3
+      if: ${{ inputs.s3-uri != '' }}
+      shell: bash
+      env:
+        FINDINGS_DIR: ${{ inputs.findings-path }}
+        S3_URI: ${{ inputs.s3-uri }}
+      run: |
+        set -euo pipefail
+        if ! command -v aws >/dev/null 2>&1; then
+          echo "::warning::aws CLI not found — skipping S3 sync"
+          exit 0
+        fi
+        aws s3 cp --recursive "$FINDINGS_DIR" "$S3_URI" \
+          --exclude "*" --include "*-findings.jsonl" --include "run-report.json"
+        echo "::notice::synced findings + run-report.json to $S3_URI"
