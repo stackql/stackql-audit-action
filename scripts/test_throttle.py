@@ -54,19 +54,30 @@ class RunStackqlThrottle(unittest.TestCase):
         self.assertIn("ThrottlingException", err)
         self.assertEqual(rc, 0)
 
+    def test_throttle_with_nonempty_stdout_becomes_error(self):
+        # The v0.7.1 miss: stackql exits 0 with throttle on stderr AND non-empty
+        # stdout (e.g. null / a sparse row). Must still be reported as an error.
+        rows, err, rc = self._run(_proc(0, stdout="null", stderr=THROTTLE_STDERR))
+        self.assertIsNone(rows)
+        self.assertIn("ThrottlingException", err)
+        self.assertEqual(rc, 0)
+
     def test_clean_empty_is_not_an_error(self):
         rows, err, rc = self._run(_proc(0, stdout="[]", stderr=""))
         self.assertEqual(rows, [])
         self.assertIsNone(err)
 
-    def test_log_retains_stderr(self):
+    def test_log_retains_stdout_and_stderr(self):
         with tempfile.TemporaryDirectory() as d:
             log = Path(d) / "q.log"
-            with mock.patch("audit.subprocess.run", return_value=_proc(0, "", THROTTLE_STDERR)):
+            with mock.patch("audit.subprocess.run",
+                            return_value=_proc(0, '{"x":1}', THROTTLE_STDERR)):
                 audit.run_stackql("SELECT 1;", "", log)
             text = log.read_text()
             self.assertIn("ThrottlingException", text)
             self.assertIn("exit: 0", text)
+            self.assertIn("--- stdout ---", text)
+            self.assertIn('{"x":1}', text)
 
 
 class FetchBucketDetailRetry(unittest.TestCase):

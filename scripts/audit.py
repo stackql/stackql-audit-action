@@ -108,11 +108,16 @@ def run_stackql(query: str, auth: str, log_path: Path) -> tuple[list[dict] | Non
     stderr = result.stderr.strip()
     # Always write the per-invocation log, even on exit 0: a query that returns
     # no rows can still emit warnings/errors on stderr, and that's invisible
-    # from the result alone — which is exactly what we want to surface.
+    # from the result alone — which is exactly what we want to surface. Capture
+    # stdout too (capped) so throttle-with-non-empty-stdout is debuggable.
+    stdout_for_log = result.stdout.strip()
+    if len(stdout_for_log) > 8192:
+        stdout_for_log = stdout_for_log[:8192] + "\n…(truncated)"
     try:
         log_path.write_text(
             f"exit: {rc}\n"
             f"--- query ---\n{query}\n"
+            f"--- stdout ---\n{stdout_for_log or '(empty)'}\n"
             f"--- stderr ---\n{stderr or '(empty)'}\n"
         )
     except OSError:
@@ -120,12 +125,14 @@ def run_stackql(query: str, auth: str, log_path: Path) -> tuple[list[dict] | Non
     if rc != 0:
         err = stderr or result.stdout.strip() or f"exit {rc}"
         return None, err, rc
+    # Treat throttle-on-stderr as an error regardless of stdout — stackql exits 0
+    # on AWS Cloud Control 400 ThrottlingException with NON-empty stdout (e.g.
+    # null / a sparse row), so the empty-result check below would miss it and
+    # return a false "no findings".
+    if _is_throttle(stderr):
+        return None, stderr, rc
     out = result.stdout.strip()
     if not out or out == "[]":
-        # stackql exits 0 on AWS throttle responses with no rows — surface it as
-        # an error so callers retry instead of recording a false "no findings".
-        if _is_throttle(stderr):
-            return None, stderr, rc
         return [], None, rc
     try:
         data = json.loads(out)
