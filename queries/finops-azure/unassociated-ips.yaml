@@ -1,0 +1,13 @@
+id: azure-finops-unassociated-ip
+name: Unassociated public IP addresses
+severity: LOW
+description: |
+  Public IPs not bound to any IP configuration (idle) — still billed hourly.
+remediation: |
+  Release with DELETE FROM azure.network.public_ip_addresses if unused.
+query: |
+  SELECT name, location, properties
+  FROM azure.network.public_ip_addresses
+  WHERE subscriptionId = '${SUBSCRIPTION_ID}'
+filter: azure_unassociated_public_ip
+columns: [name, region, estimated_monthly_usd]

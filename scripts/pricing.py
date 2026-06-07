@@ -62,7 +62,7 @@ CLASS_SPECS = {
     "public-ip": {
         "unit": "hour",
         "azure": "serviceName eq 'Virtual Network' and priceType eq 'Consumption' and contains(meterName, 'IP Address')",
-        "aws": ("AmazonEC2", [("productFamily", "IP Address"), ("group", "ElasticIP:Address")]),
+        "aws": ("AmazonEC2", [("productFamily", "IP Address")]),
         "gcp": ["Static Ip Charge", "External IP Charge"],
     },
     "nat-gateway": {

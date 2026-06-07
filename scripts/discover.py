@@ -478,13 +478,14 @@ def descend_org(org_id: str, auth: str, log_dir: Path, budget: Budget) -> tuple[
     return project_ids, stop_reason
 
 
-def run_gcp_org() -> int:
+def run_gcp_org(dirname: str = "google", title: str = "# StackQL GCP Org Audit",
+                stream: str = "gcp-org-findings.jsonl") -> int:
     if not audit.provider_allowed("google"):
-        print("::notice::skipping gcp-org: google not in STACKQL_AUDIT_PROVIDERS")
+        print(f"::notice::skipping {dirname}: google not in STACKQL_AUDIT_PROVIDERS")
         return 0
     org_id = os.environ.get("GOOGLE_ORG_ID", "").strip()
     if not org_id:
-        print("::error::GOOGLE_ORG_ID is required for the gcp-org audit")
+        print("::error::GOOGLE_ORG_ID is required for the gcp org descent")
         return 2
     parallel = max(1, int(os.environ.get("STACKQL_GCP_PARALLEL", "8")))
     fail_on = os.environ.get("FAIL_ON_SEVERITY", "HIGH").upper()
@@ -495,9 +496,9 @@ def run_gcp_org() -> int:
     action_path = Path(os.environ.get("ACTION_PATH", "."))
     filters_mod = audit.load_filters_module(action_path)
     log_dir = _setup_log_dir()
-    checks = load_checks(action_path, "google", "google")
+    checks = load_checks(action_path, dirname, "google")
     if not checks:
-        print("::warning::no google checks found in queries/google/")
+        print(f"::warning::no checks found in queries/{dirname}/")
         return 0
 
     budget = Budget.from_env(os.environ)
@@ -508,13 +509,13 @@ def run_gcp_org() -> int:
 
     findings, stopped_reason, skipped, audited = _scope_fanout(
         "project", "PROJECT_ID", project_ids, descent_stop, checks, auth,
-        filters_mod, log_dir, budget, parallel, "gcp-org-findings.jsonl")
+        filters_mod, log_dir, budget, parallel, stream)
     header = [
         (f"**Org:** `organizations/{org_id}`  ·  **Projects audited:** {audited} / "
          f"{len(project_ids)} discovered  ·  **Checks:** {len(checks)}"),
         _budget_line(budget, stopped_reason, skipped),
     ]
-    return _finalize_report("# StackQL GCP Org Audit", header, checks, findings, "project",
+    return _finalize_report(title, header, checks, findings, "project",
                             log_dir, fail_on, fail_threshold)
 
 
@@ -552,9 +553,10 @@ def list_all_subscriptions(auth: str, log_dir: Path, budget: Budget) -> tuple[li
     return subs, budget.should_stop()
 
 
-def run_azure_org() -> int:
+def run_azure_org(dirname: str = "azure", title: str = "# StackQL Azure Org Audit",
+                  stream: str = "azure-org-findings.jsonl") -> int:
     if not audit.provider_allowed("azure"):
-        print("::notice::skipping azure-org: azure not in STACKQL_AUDIT_PROVIDERS")
+        print(f"::notice::skipping {dirname}: azure not in STACKQL_AUDIT_PROVIDERS")
         return 0
     group_id = os.environ.get("AZURE_MGMT_GROUP", "").strip()
     parallel = max(1, int(os.environ.get("STACKQL_AZURE_PARALLEL", "8")))
@@ -566,9 +568,9 @@ def run_azure_org() -> int:
     action_path = Path(os.environ.get("ACTION_PATH", "."))
     filters_mod = audit.load_filters_module(action_path)
     log_dir = _setup_log_dir()
-    checks = load_checks(action_path, "azure", "azure")
+    checks = load_checks(action_path, dirname, "azure")
     if not checks:
-        print("::warning::no azure checks found in queries/azure/")
+        print(f"::warning::no checks found in queries/{dirname}/")
         return 0
 
     budget = Budget.from_env(os.environ)
@@ -584,14 +586,24 @@ def run_azure_org() -> int:
 
     findings, stopped_reason, skipped, audited = _scope_fanout(
         "subscription", "SUBSCRIPTION_ID", subs, descent_stop, checks, auth,
-        filters_mod, log_dir, budget, parallel, "azure-org-findings.jsonl")
+        filters_mod, log_dir, budget, parallel, stream)
     header = [
         (f"**Scope:** {scope_label}  ·  **Subscriptions audited:** {audited} / "
          f"{len(subs)} discovered  ·  **Checks:** {len(checks)}"),
         _budget_line(budget, stopped_reason, skipped),
     ]
-    return _finalize_report("# StackQL Azure Org Audit", header, checks, findings, "subscription",
+    return _finalize_report(title, header, checks, findings, "subscription",
                             log_dir, fail_on, fail_threshold)
+
+
+# --- target: FinOps (orphan/unattached resources, costed from the snapshot) --
+
+def run_finops_gcp() -> int:
+    return run_gcp_org("finops-gcp", "# StackQL GCP FinOps Audit", "finops-gcp-findings.jsonl")
+
+
+def run_finops_azure() -> int:
+    return run_azure_org("finops-azure", "# StackQL Azure FinOps Audit", "finops-azure-findings.jsonl")
 
 
 # --- target: Entra ID (tenant-global, no enumeration) -----------------------
@@ -670,6 +682,8 @@ COMMANDS = {
     "gcp-org": run_gcp_org,
     "azure-org": run_azure_org,
     "entra": run_entra,
+    "finops-gcp": run_finops_gcp,
+    "finops-azure": run_finops_azure,
 }
 
 

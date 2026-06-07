@@ -8,8 +8,10 @@ reported as findings.
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 
@@ -411,3 +413,123 @@ def entra_stale_users(
         if (now - last).days > max_age_days:
             matches.append({**row, "last_sign_in": last.date().isoformat()})
     return matches
+
+
+# --- FinOps: pricing lookup + orphan/unattached cost estimates ---------------
+# Reads the committed pricing snapshot (scripts/pricing.py output) and annotates
+# orphan findings with estimated_monthly_usd. Estimate, not an invoice: where a
+# class has many SKUs/regions we use the median rate for the resource's region.
+
+_PRICING_CACHE: tuple[dict, dict] | None = None
+
+
+def _pricing_path() -> Path:
+    return Path(os.environ.get("STACKQL_PRICING_SNAPSHOT")
+                or (Path(os.environ.get("ACTION_PATH", "."))
+                    / "cicd" / "reference" / "pricing" / "snapshot.json"))
+
+
+def _load_pricing() -> tuple[dict, dict]:
+    """Return (index, units). index keys: (provider, class, region) and
+    (provider, class, None) -> [prices]; units: class -> unit string."""
+    global _PRICING_CACHE
+    if _PRICING_CACHE is not None:
+        return _PRICING_CACHE
+    try:
+        data = json.loads(_pricing_path().read_text())
+        rates = data.get("rates", [])
+    except (OSError, json.JSONDecodeError):
+        rates = []
+    idx: dict = {}
+    units: dict = {}
+    for r in rates:
+        p, k, region = r.get("provider"), r.get("resource_class"), r.get("region")
+        price = r.get("price")
+        if price is None:
+            continue
+        idx.setdefault((p, k, region), []).append(price)
+        idx.setdefault((p, k, None), []).append(price)
+        units[k] = r.get("unit")
+    _PRICING_CACHE = (idx, units)
+    return _PRICING_CACHE
+
+
+def _median(xs: list[float]) -> float:
+    xs = sorted(xs)
+    n = len(xs)
+    return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
+
+
+def _monthly_cost(provider: str, klass: str, region: str | None, size_gb: Any = None) -> float | None:
+    idx, units = _load_pricing()
+    prices = idx.get((provider, klass, region)) or idx.get((provider, klass, None))
+    if not prices:
+        return None
+    price = _median(prices)
+    unit = units.get(klass)
+    if unit == "GB-month":
+        try:
+            return round(price * float(size_gb or 0), 2)
+        except (TypeError, ValueError):
+            return None
+    if unit == "hour":
+        return round(price * 730, 2)
+    return round(price, 2)
+
+
+def _gcp_region(row: dict) -> str | None:
+    region = row.get("region")
+    if region:
+        return region.rsplit("/", 1)[-1]
+    zone = (row.get("zone") or "").rsplit("/", 1)[-1]
+    return zone.rsplit("-", 1)[0] if zone else None
+
+
+def gcp_unattached_disk(rows: list[dict]) -> list[dict]:
+    """Persistent disks with no attached instances (users == [])."""
+    out: list[dict] = []
+    for r in rows:
+        if _coerce_list(r.get("users")):
+            continue
+        region = _gcp_region(r)
+        out.append({**r, "region": region,
+                    "estimated_monthly_usd": _monthly_cost("gcp", "block-storage", region, r.get("sizeGb"))})
+    return out
+
+
+def gcp_unused_address(rows: list[dict]) -> list[dict]:
+    """Reserved static IPs not in use (status RESERVED, no users)."""
+    out: list[dict] = []
+    for r in rows:
+        if (r.get("status") or "") != "RESERVED" or _coerce_list(r.get("users")):
+            continue
+        region = _gcp_region(r)
+        out.append({**r, "region": region,
+                    "estimated_monthly_usd": _monthly_cost("gcp", "public-ip", region)})
+    return out
+
+
+def azure_unattached_disk(rows: list[dict]) -> list[dict]:
+    """Managed disks not attached to anything (managedBy is null/empty)."""
+    out: list[dict] = []
+    for r in rows:
+        if r.get("managedBy"):
+            continue
+        props = _coerce_dict(r.get("properties"))
+        size = props.get("diskSizeGB")
+        region = r.get("location")
+        out.append({**r, "region": region, "size_gb": size,
+                    "estimated_monthly_usd": _monthly_cost("azure", "block-storage", region, size)})
+    return out
+
+
+def azure_unassociated_public_ip(rows: list[dict]) -> list[dict]:
+    """Public IPs not bound to any IP configuration (idle, still billed)."""
+    out: list[dict] = []
+    for r in rows:
+        if _coerce_dict(r.get("properties")).get("ipConfiguration"):
+            continue
+        region = r.get("location")
+        out.append({**r, "region": region,
+                    "estimated_monthly_usd": _monthly_cost("azure", "public-ip", region)})
+    return out

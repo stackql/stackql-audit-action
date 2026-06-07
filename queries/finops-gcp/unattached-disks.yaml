@@ -1,0 +1,14 @@
+id: gcp-finops-unattached-disk
+name: Unattached persistent disks
+severity: LOW
+description: |
+  Persistent disks with no attached instance (users == []). Billed per GB-month
+  while idle. Estimated monthly cost from the pricing snapshot.
+remediation: |
+  Snapshot if needed, then DELETE FROM google.compute.disks the orphaned disk.
+query: |
+  SELECT name, sizeGb, type, zone, region, users
+  FROM google.compute.disks
+  WHERE project = '${PROJECT_ID}'
+filter: gcp_unattached_disk
+columns: [name, region, sizeGb, estimated_monthly_usd]
