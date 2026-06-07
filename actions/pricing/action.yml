@@ -1,0 +1,146 @@
+name: 'StackQL Pricing Gather'
+description: 'Refresh the normalized vendor pricing snapshot (pricing/snapshot.json) consumed by the FinOps audit. Run on a schedule/event — not per audit run.'
+author: 'StackQL'
+branding:
+  icon: 'dollar-sign'
+  color: 'blue'
+
+inputs:
+  providers:
+    description: 'Which catalogs to gather: "all" or a space/comma list of aws azure gcp. Azure is anonymous; aws/gcp gather only when their auth is supplied.'
+    required: false
+    default: 'all'
+  # AWS (Price List Query API) — OIDC role with pricing:GetProducts
+  aws-role-arn:
+    description: 'AWS role ARN to assume (OIDC). Needs pricing:GetProducts.'
+    required: false
+    default: ''
+  # GCP (Cloud Billing Catalog via cloudbilling.skus) — WIF
+  gcp-workload-identity-provider:
+    description: 'GCP workload identity provider.'
+    required: false
+    default: ''
+  gcp-sa-email:
+    description: 'GCP service account email (needs cloudbilling catalog read).'
+    required: false
+    default: ''
+  google-provider-version:
+    description: 'stackql Google provider version (blank = latest).'
+    required: false
+    default: 'v25.12.00357'
+  stackql-version:
+    description: 'stackql release to install (or "latest").'
+    required: false
+    default: 'latest'
+  # Publication
+  s3-uri:
+    description: 'If set, copy pricing/snapshot.json to this s3:// destination (requires AWS creds in env).'
+    required: false
+    default: ''
+  upload-artifact:
+    description: 'Upload pricing/snapshot.json as the "stackql-pricing-snapshot" artifact.'
+    required: false
+    default: 'true'
+
+outputs:
+  snapshot-path:
+    description: 'Path to the written pricing snapshot.'
+    value: ${{ steps.gather.outputs.snapshot-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install stackql
+      shell: bash
+      env:
+        STACKQL_VERSION: ${{ inputs.stackql-version }}
+      run: |
+        set -euo pipefail
+        cd "${RUNNER_TEMP}"
+        if [ "${STACKQL_VERSION}" = "latest" ]; then
+          url="https://releases.stackql.io/stackql/latest/stackql_linux_amd64.zip"
+        else
+          url="https://releases.stackql.io/stackql/${STACKQL_VERSION}/stackql_linux_amd64.zip"
+        fi
+        curl -fsSL "$url" -o stackql.zip
+        unzip -q stackql.zip && chmod +x stackql
+        echo "${RUNNER_TEMP}" >> "$GITHUB_PATH"
+
+    - name: ID Fed - configure AWS credentials (OIDC)
+      id: aws_auth
+      if: inputs.aws-role-arn != ''
+      continue-on-error: true
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.aws-role-arn }}
+        aws-region: us-east-1
+
+    - name: ID Fed - authenticate to Google Cloud (OIDC)
+      id: gcp_auth
+      if: inputs.gcp-workload-identity-provider != '' && inputs.gcp-sa-email != ''
+      continue-on-error: true
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ inputs.gcp-workload-identity-provider }}
+        service_account: ${{ inputs.gcp-sa-email }}
+        token_format: 'access_token'
+
+    - name: Gather pricing
+      id: gather
+      shell: bash
+      env:
+        PROVIDERS: ${{ inputs.providers }}
+        GOOGLE_VER: ${{ inputs.google-provider-version }}
+        AWS_AUTH_OK: ${{ steps.aws_auth.outcome == 'success' }}
+        GCP_AUTH_OK: ${{ steps.gcp_auth.outcome == 'success' }}
+        GCP_ACCESS_TOKEN: ${{ steps.gcp_auth.outputs.access_token }}
+      run: |
+        set -uo pipefail
+        ACTION_PATH="$(cd "${{ github.action_path }}/../.." && pwd)"   # repo root
+        export ACTION_PATH
+        python3 -m pip install --quiet -r "${ACTION_PATH}/cicd/requirements.txt"
+        if [ "$GCP_AUTH_OK" = "true" ]; then
+          stackql exec "registry pull google ${GOOGLE_VER};" || true
+          export STACKQL_AUDIT_AUTH='{"google":{"type":"bearer","credentialsenvvar":"GCP_ACCESS_TOKEN"}}'
+        fi
+        # Resolve which providers can actually gather (azure always; aws/gcp need auth).
+        req="$PROVIDERS"; [ "$req" = "all" ] && req="aws azure gcp"
+        sel=""
+        for p in ${req//,/ }; do
+          case "$p" in
+            azure) sel="$sel azure" ;;
+            aws)   [ "$AWS_AUTH_OK" = "true" ] && sel="$sel aws"   || echo "::notice::skip aws pricing (no auth)" ;;
+            gcp)   [ "$GCP_AUTH_OK" = "true" ] && sel="$sel gcp"   || echo "::notice::skip gcp pricing (no auth)" ;;
+          esac
+        done
+        sel="${sel# }"
+        echo "::notice::gathering pricing for: ${sel:-(none)}"
+        export PRICING_OUT_DIR="${{ github.workspace }}/pricing"
+        # One pass over the authed providers — pricing.py writes the full snapshot.
+        if [ -n "$sel" ]; then
+          python3 "${ACTION_PATH}/scripts/pricing.py" $sel || echo "::warning::pricing gather exited non-zero"
+        else
+          echo "::warning::no providers to gather (none authed) — no snapshot written"
+        fi
+        echo "snapshot-path=${PRICING_OUT_DIR}/snapshot.json" >> "$GITHUB_OUTPUT"
+
+    - name: Upload snapshot artifact
+      if: ${{ always() && inputs.upload-artifact == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: stackql-pricing-snapshot
+        path: ${{ github.workspace }}/pricing/snapshot.json
+        if-no-files-found: ignore
+
+    - name: Sync snapshot to S3
+      if: ${{ inputs.s3-uri != '' }}
+      shell: bash
+      env:
+        S3_URI: ${{ inputs.s3-uri }}
+      run: |
+        set -euo pipefail
+        if ! command -v aws >/dev/null 2>&1; then
+          echo "::warning::aws CLI not found — skipping S3 sync"; exit 0
+        fi
+        aws s3 cp "${{ github.workspace }}/pricing/snapshot.json" "$S3_URI"
+        echo "::notice::synced pricing snapshot to $S3_URI"
