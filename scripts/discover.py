@@ -633,7 +633,16 @@ def run_entra() -> int:
             log = log_dir / f"entra__{c['_file'].replace('/', '_')}.log"
             rows, err, _ = audit.run_stackql(c["query"], auth, log)
             if err:
-                print(f"::warning::entra check {c['_file']} errored: {err.splitlines()[0]}")
+                first = err.splitlines()[0] if err else ""
+                print(f"::warning::entra check {c['_file']} errored: {first}")
+                # Surface the errored (e.g. throttled) check as UNKNOWN, not a silent drop.
+                stream.write(json.dumps({
+                    "check": "_meta/enum-error",
+                    "name": "entra check enumeration failed",
+                    "severity": "UNKNOWN",
+                    "failed_check": c["_file"],
+                    "error": first,
+                }) + "\n")
                 continue
             if c.get("filter"):
                 try:
