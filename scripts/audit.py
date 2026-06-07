@@ -21,15 +21,30 @@ from typing import Any
 
 import yaml
 
-SEVERITY_ORDER = {"NONE": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+# UNKNOWN = -1 sorts below NONE so synthetic enumeration-error findings never
+# trip FAIL_ON_SEVERITY (the gate is `>= fail_threshold`, fail_threshold >= 0).
+SEVERITY_ORDER = {"UNKNOWN": -1, "NONE": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 SEVERITY_BADGE = {
     "CRITICAL": "🟥 CRITICAL",
     "HIGH": "🟧 HIGH",
     "MEDIUM": "🟨 MEDIUM",
     "LOW": "🟦 LOW",
     "NONE": "⬜ NONE",
+    "UNKNOWN": "❔ UNKNOWN",
 }
 MAX_PARALLEL = int(os.environ.get("STACKQL_AUDIT_PARALLEL", "8"))
+
+# AWS Cloud Control (and similar cloud APIs) answer HTTP 400 throttle responses
+# on which `stackql exec` writes the error to stderr but still exits 0. Without
+# detection that reads as "succeeded, no rows" and the resource silently vanishes
+# from the output. run_stackql treats throttled-empty results as errors so every
+# caller's retry/error path engages.
+THROTTLE_MARKERS = ("slowdown", "throttl", "requestlimitexceeded", "rate exceeded", "503")
+
+
+def _is_throttle(err: str | None) -> bool:
+    e = (err or "").lower()
+    return any(m in e for m in THROTTLE_MARKERS)
 
 
 def build_auth() -> tuple[str, set[str]]:
@@ -107,6 +122,10 @@ def run_stackql(query: str, auth: str, log_path: Path) -> tuple[list[dict] | Non
         return None, err, rc
     out = result.stdout.strip()
     if not out or out == "[]":
+        # stackql exits 0 on AWS throttle responses with no rows — surface it as
+        # an error so callers retry instead of recording a false "no findings".
+        if _is_throttle(stderr):
+            return None, stderr, rc
         return [], None, rc
     try:
         data = json.loads(out)
