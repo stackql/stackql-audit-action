@@ -49,12 +49,9 @@ S3_DETAIL_COLS = [
     "versioning_configuration",
     "ownership_controls",
 ]
-THROTTLE_MARKERS = ("slowdown", "throttl", "requestlimitexceeded", "rate exceeded", "503")
-
-
-def _is_throttle(err: str | None) -> bool:
-    e = (err or "").lower()
-    return any(m in e for m in THROTTLE_MARKERS)
+# Per-attempt backoff for throttled per-resource detail fetches (indexed by
+# attempt 0..2). ~2s, 5s, 12s before ±25% jitter — ≈20s worst case per resource.
+RETRY_DELAYS = (2.0, 5.0, 12.0)
 
 
 _BUCKET_REGION_RE = re.compile(r"\.s3[.-]([a-z0-9-]+)\.amazonaws\.com$", re.IGNORECASE)
@@ -175,21 +172,26 @@ def _finalize_report(title: str, header_lines: list[str], checks: list[dict],
 
 
 def audit_scope(label: str, scope_var: str, scope_value: str, checks: list[dict],
-                auth: str, filters_mod, log_dir: Path, budget: Budget) -> dict[str, list[dict]] | None:
+                auth: str, filters_mod, log_dir: Path, budget: Budget):
     """Run every query-check for one scope (region / project / subscription),
-    substituting ${scope_var}. Returns {check_file: rows} (rows tagged with
-    `label`=scope_value), or None if the budget was exhausted (scope skipped)."""
+    substituting ${scope_var}. Returns (findings, errors) — findings is
+    {check_file: rows} (rows tagged with `label`=scope_value); errors is a list
+    of {failed_check, error} for queries that errored (e.g. throttled), so the
+    caller can surface them as UNKNOWN instead of dropping them. Returns None if
+    the budget was exhausted (scope skipped)."""
     if budget.should_stop():
         return None
     budget.add_node()
     safe = scope_value.replace("/", "_")
     out: dict[str, list[dict]] = {}
+    errors: list[dict] = []
     for c in checks:
         query = c["query"].replace("${" + scope_var + "}", scope_value)
         budget.add_query()
         log = log_dir / f"{label}__{safe}__{c['_file'].replace('/', '_')}.log"
         rows, err, _ = audit.run_stackql(query, auth, log)
         if err:
+            errors.append({"failed_check": c["_file"], "error": err.splitlines()[0] if err else ""})
             continue
         if c.get("filter"):
             try:
@@ -201,7 +203,7 @@ def audit_scope(label: str, scope_var: str, scope_value: str, checks: list[dict]
             for r in rows:
                 r[label] = scope_value
             out[c["_file"]] = rows
-    return out
+    return out, errors
 
 
 def _scope_fanout(label: str, scope_var: str, scope_values: list[str], descent_stop: str | None,
@@ -228,13 +230,24 @@ def _scope_fanout(label: str, scope_var: str, scope_values: list[str], descent_s
                     stopped_reason = budget.should_stop()
                     print(f"::warning::deep audit stopping early — {stopped_reason}; analyzing partial results")
                 continue
+            out_map, errors = res
             audited += 1
-            for cfile, rows in res.items():
+            for cfile, rows in out_map.items():
                 findings[cfile].extend(rows)
                 c = next(x for x in checks if x["_file"] == cfile)
                 sev = c.get("severity", "MEDIUM").upper()
                 for r in rows:
                     stream.write(json.dumps({label: v, "check": cfile, "name": c["name"], "severity": sev}) + "\n")
+            # Surface errored (e.g. throttled) checks as UNKNOWN rather than dropping them.
+            for e in errors:
+                stream.write(json.dumps({
+                    label: v,
+                    "check": "_meta/enum-error",
+                    "name": "scope detail enumeration failed",
+                    "severity": "UNKNOWN",
+                    "failed_check": e["failed_check"],
+                    "error": e["error"],
+                }) + "\n")
     return findings, stopped_reason, skipped, audited
 
 
@@ -251,8 +264,9 @@ def list_bucket_names(region: str, auth: str, log_dir: Path, budget: Budget) -> 
 
 
 def fetch_bucket_detail(bucket: str, region: str, auth: str, log_dir: Path, budget: Budget,
-                        retries: int = 4, base_delay: float = 0.5):
-    """Fetch one bucket's detail row, retrying with backoff on throttling.
+                        retries: int = 3):
+    """Fetch one bucket's detail row, retrying throttles on the RETRY_DELAYS
+    schedule (2s, 5s, 12s ±25% jitter — ≈20s worst case per bucket).
 
     Returns (detail, error, stop_reason). If the budget is exhausted the bucket
     is skipped (no query issued) and stop_reason explains why."""
@@ -267,8 +281,8 @@ def fetch_bucket_detail(bucket: str, region: str, auth: str, log_dir: Path, budg
     for attempt in range(retries + 1):
         budget.add_query()
         rows, err, _ = audit.run_stackql(q, auth, log_dir / f"s3__{safe}.log")
-        if err and _is_throttle(err) and attempt < retries:
-            time.sleep(base_delay * (2 ** attempt) + random.random() * base_delay)
+        if err and audit._is_throttle(err) and attempt < retries:
+            time.sleep(RETRY_DELAYS[attempt] * (0.75 + random.random() * 0.5))
             continue
         if err:
             return None, err, None
@@ -328,7 +342,18 @@ def run_s3() -> int:
                 continue
             if err:
                 fetch_errors.append((bucket, err))
-                print(f"::warning::S3 detail failed for {bucket}: {err.splitlines()[0]}")
+                first = err.splitlines()[0] if err else ""
+                print(f"::warning::S3 detail failed for {bucket}: {first}")
+                # Surface the unresolved bucket as one UNKNOWN finding rather than
+                # dropping it silently — one per bucket, not per check.
+                stream.write(json.dumps({
+                    "bucket": bucket,
+                    "region": region,
+                    "check": "_meta/enum-error",
+                    "name": "S3 bucket detail enumeration failed",
+                    "severity": "UNKNOWN",
+                    "error": first,
+                }) + "\n")
                 continue
             if not detail:
                 continue
@@ -608,7 +633,16 @@ def run_entra() -> int:
             log = log_dir / f"entra__{c['_file'].replace('/', '_')}.log"
             rows, err, _ = audit.run_stackql(c["query"], auth, log)
             if err:
-                print(f"::warning::entra check {c['_file']} errored: {err.splitlines()[0]}")
+                first = err.splitlines()[0] if err else ""
+                print(f"::warning::entra check {c['_file']} errored: {first}")
+                # Surface the errored (e.g. throttled) check as UNKNOWN, not a silent drop.
+                stream.write(json.dumps({
+                    "check": "_meta/enum-error",
+                    "name": "entra check enumeration failed",
+                    "severity": "UNKNOWN",
+                    "failed_check": c["_file"],
+                    "error": first,
+                }) + "\n")
                 continue
             if c.get("filter"):
                 try:

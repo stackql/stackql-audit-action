@@ -21,15 +21,30 @@ from typing import Any
 
 import yaml
 
-SEVERITY_ORDER = {"NONE": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+# UNKNOWN = -1 sorts below NONE so synthetic enumeration-error findings never
+# trip FAIL_ON_SEVERITY (the gate is `>= fail_threshold`, fail_threshold >= 0).
+SEVERITY_ORDER = {"UNKNOWN": -1, "NONE": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 SEVERITY_BADGE = {
     "CRITICAL": "🟥 CRITICAL",
     "HIGH": "🟧 HIGH",
     "MEDIUM": "🟨 MEDIUM",
     "LOW": "🟦 LOW",
     "NONE": "⬜ NONE",
+    "UNKNOWN": "❔ UNKNOWN",
 }
 MAX_PARALLEL = int(os.environ.get("STACKQL_AUDIT_PARALLEL", "8"))
+
+# AWS Cloud Control (and similar cloud APIs) answer HTTP 400 throttle responses
+# on which `stackql exec` writes the error to stderr but still exits 0. Without
+# detection that reads as "succeeded, no rows" and the resource silently vanishes
+# from the output. run_stackql treats throttled-empty results as errors so every
+# caller's retry/error path engages.
+THROTTLE_MARKERS = ("slowdown", "throttl", "requestlimitexceeded", "rate exceeded", "503")
+
+
+def _is_throttle(err: str | None) -> bool:
+    e = (err or "").lower()
+    return any(m in e for m in THROTTLE_MARKERS)
 
 
 def build_auth() -> tuple[str, set[str]]:
@@ -93,11 +108,16 @@ def run_stackql(query: str, auth: str, log_path: Path) -> tuple[list[dict] | Non
     stderr = result.stderr.strip()
     # Always write the per-invocation log, even on exit 0: a query that returns
     # no rows can still emit warnings/errors on stderr, and that's invisible
-    # from the result alone — which is exactly what we want to surface.
+    # from the result alone — which is exactly what we want to surface. Capture
+    # stdout too (capped) so throttle-with-non-empty-stdout is debuggable.
+    stdout_for_log = result.stdout.strip()
+    if len(stdout_for_log) > 8192:
+        stdout_for_log = stdout_for_log[:8192] + "\n…(truncated)"
     try:
         log_path.write_text(
             f"exit: {rc}\n"
             f"--- query ---\n{query}\n"
+            f"--- stdout ---\n{stdout_for_log or '(empty)'}\n"
             f"--- stderr ---\n{stderr or '(empty)'}\n"
         )
     except OSError:
@@ -105,6 +125,12 @@ def run_stackql(query: str, auth: str, log_path: Path) -> tuple[list[dict] | Non
     if rc != 0:
         err = stderr or result.stdout.strip() or f"exit {rc}"
         return None, err, rc
+    # Treat throttle-on-stderr as an error regardless of stdout — stackql exits 0
+    # on AWS Cloud Control 400 ThrottlingException with NON-empty stdout (e.g.
+    # null / a sparse row), so the empty-result check below would miss it and
+    # return a false "no findings".
+    if _is_throttle(stderr):
+        return None, stderr, rc
     out = result.stdout.strip()
     if not out or out == "[]":
         return [], None, rc
