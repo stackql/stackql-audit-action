@@ -119,11 +119,15 @@ def _budget_line(budget: Budget, stopped_reason: str | None, skipped: int) -> st
 
 def _finalize_report(title: str, header_lines: list[str], checks: list[dict],
                      findings: dict[str, list[dict]], label: str | None,
-                     log_dir: Path, fail_on: str, fail_threshold: int) -> int:
+                     log_dir: Path, fail_on: str, fail_threshold: int,
+                     target: str = "") -> int:
     """Render the markdown summary + sections, emit outputs, return the exit code.
 
     If `label` is set, it's prepended as a column to each finding (e.g. which
-    project/region/subscription the finding came from)."""
+    project/region/subscription the finding came from). If `target` is set, an
+    assayed-tally is written so absent/clean resources are reported plainly in the
+    data output (not just silently missing): one row per check with its count and
+    status (clean / findings)."""
     by_sev = {k: 0 for k in audit.SEVERITY_ORDER}
     total = 0
     highest = "NONE"
@@ -153,6 +157,23 @@ def _finalize_report(title: str, header_lines: list[str], checks: list[dict],
     out.extend(sections)
     rendered = "\n".join(out)
     print(rendered)
+
+    # Assayed tally: one row per check, including the clean ones, so a resource
+    # absent from the client's space is told plainly in the data — not omitted.
+    if target:
+        try:
+            with open(_setup_stream_dir() / f"{target}-assayed.jsonl", "a", buffering=1) as af:
+                for c in checks:
+                    n = len(findings.get(c["_file"], []))
+                    af.write(json.dumps({
+                        "check": c["_file"],
+                        "name": c.get("name"),
+                        "severity": (c.get("severity") or "MEDIUM").upper(),
+                        "count": n,
+                        "status": "findings" if n else "clean",
+                    }) + "\n")
+        except OSError as e:
+            print(f"::warning::could not write assayed tally for {target}: {e}")
 
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
@@ -237,7 +258,13 @@ def _scope_fanout(label: str, scope_var: str, scope_values: list[str], descent_s
                 c = next(x for x in checks if x["_file"] == cfile)
                 sev = c.get("severity", "MEDIUM").upper()
                 for r in rows:
-                    stream.write(json.dumps({label: v, "check": cfile, "name": c["name"], "severity": sev}) + "\n")
+                    _keep = {
+                        k: r[k] for k in (
+                            "estimated_monthly_usd",
+                            "volumeId", "publicIp", "address", "name", "size", "size_gb", "sizeGb",
+                        ) if k in r
+                    }
+                    stream.write(json.dumps({**_keep, label: v, "check": cfile, "name": c["name"], "severity": sev}) + "\n")
             # Surface errored (e.g. throttled) checks as UNKNOWN rather than dropping them.
             for e in errors:
                 stream.write(json.dumps({
@@ -383,7 +410,7 @@ def run_s3() -> int:
         _budget_line(budget, stopped_reason, skipped),
     ]
     return _finalize_report("# StackQL S3 Audit", header, checks, findings, None,
-                            log_dir, fail_on, fail_threshold)
+                            log_dir, fail_on, fail_threshold, target="s3")
 
 
 # --- target: AWS all-regions sweep -----------------------------------------
@@ -401,9 +428,10 @@ def enumerate_regions(seed_region: str, auth: str, log_dir: Path, budget: Budget
             if r.get("regionName") and (r.get("optInStatus") or "") in ("opt-in-not-required", "opted-in")]
 
 
-def run_aws_regions() -> int:
+def run_aws_regions(dirname: str = "aws", title: str = "# StackQL AWS All-Regions Audit",
+                    stream: str = "aws-regions-findings.jsonl") -> int:
     if not audit.provider_allowed("aws"):
-        print("::notice::skipping aws-regions: aws not in STACKQL_AUDIT_PROVIDERS")
+        print(f"::notice::skipping {dirname}: aws not in STACKQL_AUDIT_PROVIDERS")
         return 0
     seed = os.environ.get("AWS_REGION", "").strip()
     if not seed:
@@ -418,9 +446,9 @@ def run_aws_regions() -> int:
     action_path = Path(os.environ.get("ACTION_PATH", "."))
     filters_mod = audit.load_filters_module(action_path)
     log_dir = _setup_log_dir()
-    checks = load_checks(action_path, "aws", "aws")
+    checks = load_checks(action_path, dirname, "aws")
     if not checks:
-        print("::warning::no aws checks found in queries/aws/")
+        print(f"::warning::no checks found in queries/{dirname}/")
         return 0
 
     budget = Budget.from_env(os.environ)
@@ -431,13 +459,13 @@ def run_aws_regions() -> int:
 
     findings, stopped_reason, skipped, audited = _scope_fanout(
         "region", "AWS_REGION", regions, None, checks, auth,
-        filters_mod, log_dir, budget, parallel, "aws-regions-findings.jsonl")
+        filters_mod, log_dir, budget, parallel, stream)
     header = [
         f"**Regions audited:** {audited} / {len(regions)} enabled  ·  **Checks:** {len(checks)}",
         _budget_line(budget, stopped_reason, skipped),
     ]
-    return _finalize_report("# StackQL AWS All-Regions Audit", header, checks, findings, "region",
-                            log_dir, fail_on, fail_threshold)
+    return _finalize_report(title, header, checks, findings, "region",
+                            log_dir, fail_on, fail_threshold, target=dirname)
 
 
 # --- target: GCP org descent ------------------------------------------------
@@ -478,13 +506,14 @@ def descend_org(org_id: str, auth: str, log_dir: Path, budget: Budget) -> tuple[
     return project_ids, stop_reason
 
 
-def run_gcp_org() -> int:
+def run_gcp_org(dirname: str = "google", title: str = "# StackQL GCP Org Audit",
+                stream: str = "gcp-org-findings.jsonl") -> int:
     if not audit.provider_allowed("google"):
-        print("::notice::skipping gcp-org: google not in STACKQL_AUDIT_PROVIDERS")
+        print(f"::notice::skipping {dirname}: google not in STACKQL_AUDIT_PROVIDERS")
         return 0
     org_id = os.environ.get("GOOGLE_ORG_ID", "").strip()
     if not org_id:
-        print("::error::GOOGLE_ORG_ID is required for the gcp-org audit")
+        print("::error::GOOGLE_ORG_ID is required for the gcp org descent")
         return 2
     parallel = max(1, int(os.environ.get("STACKQL_GCP_PARALLEL", "8")))
     fail_on = os.environ.get("FAIL_ON_SEVERITY", "HIGH").upper()
@@ -495,9 +524,9 @@ def run_gcp_org() -> int:
     action_path = Path(os.environ.get("ACTION_PATH", "."))
     filters_mod = audit.load_filters_module(action_path)
     log_dir = _setup_log_dir()
-    checks = load_checks(action_path, "google", "google")
+    checks = load_checks(action_path, dirname, "google")
     if not checks:
-        print("::warning::no google checks found in queries/google/")
+        print(f"::warning::no checks found in queries/{dirname}/")
         return 0
 
     budget = Budget.from_env(os.environ)
@@ -508,14 +537,14 @@ def run_gcp_org() -> int:
 
     findings, stopped_reason, skipped, audited = _scope_fanout(
         "project", "PROJECT_ID", project_ids, descent_stop, checks, auth,
-        filters_mod, log_dir, budget, parallel, "gcp-org-findings.jsonl")
+        filters_mod, log_dir, budget, parallel, stream)
     header = [
         (f"**Org:** `organizations/{org_id}`  ·  **Projects audited:** {audited} / "
          f"{len(project_ids)} discovered  ·  **Checks:** {len(checks)}"),
         _budget_line(budget, stopped_reason, skipped),
     ]
-    return _finalize_report("# StackQL GCP Org Audit", header, checks, findings, "project",
-                            log_dir, fail_on, fail_threshold)
+    return _finalize_report(title, header, checks, findings, "project",
+                            log_dir, fail_on, fail_threshold, target=dirname)
 
 
 # --- target: Azure management-group descent ---------------------------------
@@ -552,9 +581,10 @@ def list_all_subscriptions(auth: str, log_dir: Path, budget: Budget) -> tuple[li
     return subs, budget.should_stop()
 
 
-def run_azure_org() -> int:
+def run_azure_org(dirname: str = "azure", title: str = "# StackQL Azure Org Audit",
+                  stream: str = "azure-org-findings.jsonl") -> int:
     if not audit.provider_allowed("azure"):
-        print("::notice::skipping azure-org: azure not in STACKQL_AUDIT_PROVIDERS")
+        print(f"::notice::skipping {dirname}: azure not in STACKQL_AUDIT_PROVIDERS")
         return 0
     group_id = os.environ.get("AZURE_MGMT_GROUP", "").strip()
     parallel = max(1, int(os.environ.get("STACKQL_AZURE_PARALLEL", "8")))
@@ -566,9 +596,9 @@ def run_azure_org() -> int:
     action_path = Path(os.environ.get("ACTION_PATH", "."))
     filters_mod = audit.load_filters_module(action_path)
     log_dir = _setup_log_dir()
-    checks = load_checks(action_path, "azure", "azure")
+    checks = load_checks(action_path, dirname, "azure")
     if not checks:
-        print("::warning::no azure checks found in queries/azure/")
+        print(f"::warning::no checks found in queries/{dirname}/")
         return 0
 
     budget = Budget.from_env(os.environ)
@@ -584,14 +614,28 @@ def run_azure_org() -> int:
 
     findings, stopped_reason, skipped, audited = _scope_fanout(
         "subscription", "SUBSCRIPTION_ID", subs, descent_stop, checks, auth,
-        filters_mod, log_dir, budget, parallel, "azure-org-findings.jsonl")
+        filters_mod, log_dir, budget, parallel, stream)
     header = [
         (f"**Scope:** {scope_label}  ·  **Subscriptions audited:** {audited} / "
          f"{len(subs)} discovered  ·  **Checks:** {len(checks)}"),
         _budget_line(budget, stopped_reason, skipped),
     ]
-    return _finalize_report("# StackQL Azure Org Audit", header, checks, findings, "subscription",
-                            log_dir, fail_on, fail_threshold)
+    return _finalize_report(title, header, checks, findings, "subscription",
+                            log_dir, fail_on, fail_threshold, target=dirname)
+
+
+# --- target: FinOps (orphan/unattached resources, costed from the snapshot) --
+
+def run_finops_aws() -> int:
+    return run_aws_regions("finops-aws", "# StackQL AWS FinOps Audit", "finops-aws-findings.jsonl")
+
+
+def run_finops_gcp() -> int:
+    return run_gcp_org("finops-gcp", "# StackQL GCP FinOps Audit", "finops-gcp-findings.jsonl")
+
+
+def run_finops_azure() -> int:
+    return run_azure_org("finops-azure", "# StackQL Azure FinOps Audit", "finops-azure-findings.jsonl")
 
 
 # --- target: Entra ID (tenant-global, no enumeration) -----------------------
@@ -661,7 +705,7 @@ def run_entra() -> int:
         _budget_line(budget, stopped_reason, 0),
     ]
     return _finalize_report("# StackQL Entra ID Audit", header, checks, findings, None,
-                            log_dir, fail_on, fail_threshold)
+                            log_dir, fail_on, fail_threshold, target="entra")
 
 
 COMMANDS = {
@@ -670,6 +714,9 @@ COMMANDS = {
     "gcp-org": run_gcp_org,
     "azure-org": run_azure_org,
     "entra": run_entra,
+    "finops-aws": run_finops_aws,
+    "finops-gcp": run_finops_gcp,
+    "finops-azure": run_finops_azure,
 }
 
 

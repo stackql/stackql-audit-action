@@ -1,0 +1,61 @@
+name: Cloud FinOps Audit (OIDC)
+
+# Zero-touch cloud waste detection: enumerates orphan/unattached resources across
+# AWS, GCP and Azure and costs each from the committed pricing snapshot. OIDC only
+# — no long-lived secrets.
+
+on:
+  workflow_dispatch:
+    inputs:
+      aws-region:
+        description: AWS region — seed for the region sweep (finops-aws)
+        required: false
+        default: us-east-1
+      google-org-id:
+        description: GCP organization ID, digits only (finops-gcp project descent)
+        required: false
+        default: ''
+      azure-mgmt-group:
+        description: Azure management group ID (blank = all tenant subscriptions)
+        required: false
+        default: ''
+      target:
+        description: Space-separated FinOps targets
+        required: false
+        default: finops-aws finops-gcp finops-azure
+      max-nodes:
+        description: 'Budget: max org-nodes visited (-1 = unlimited)'
+        required: false
+        default: '-1'
+  schedule:
+    - cron: '0 6 * * 1'   # weekly waste sweep, Monday 06:00 UTC
+
+jobs:
+  finops-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write       # required: GitHub OIDC token issuance
+      contents: read
+    steps:
+      - uses: stackql/stackql-audit-action/actions/oidc@v0.8   # pin a release that includes the finops-* targets
+        with:
+          target: ${{ inputs.target || 'finops-aws finops-gcp finops-azure' }}
+          # AWS (OIDC -> sts:AssumeRoleWithWebIdentity)
+          aws-role-arn: ${{ secrets.STACKQL_ID_FED_AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.aws-region || 'us-east-1' }}
+          # GCP (Workload Identity Federation -> SA impersonation)
+          gcp-workload-identity-provider: ${{ secrets.STACKQL_ID_FED_GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          gcp-sa-email: ${{ secrets.STACKQL_ID_FED_GCP_SERVICE_ACCOUNT }}
+          google-org-id: ${{ inputs.google-org-id }}
+          # Azure (federated identity, no client secret — finops needs no Graph)
+          azure-tenant-id: ${{ secrets.STACKQL_ID_FED_AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.STACKQL_ID_FED_AZURE_CLIENT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_INTEGRATION_TESTING_SUB_ID }}
+          azure-mgmt-group: ${{ inputs.azure-mgmt-group }}
+          # Budget + output
+          max-nodes: ${{ inputs.max-nodes || '-1' }}
+          timeout-seconds: '1800'
+          # Findings + estimated_monthly_usd are uploaded as workflow artifacts
+          # (deep-audit-data-streams: *-findings.jsonl + summary.json). No outbound
+          # credentials — read-only, OIDC-only, nothing leaves GitHub.
+          upload-logs: 'true'

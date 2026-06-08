@@ -21,18 +21,33 @@ from pathlib import Path
 SUFFIX = "-findings.jsonl"
 
 
+ASSAYED_SUFFIX = "-assayed.jsonl"
+
+
+def _read_jsonl(path: Path) -> list:
+    out = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            print(f"::warning::skipping malformed line in {path.name}")
+    return out
+
+
 def merge(streams_dir: Path) -> dict:
     merged: dict[str, list] = {}
-    for jf in sorted(streams_dir.rglob("*" + SUFFIX)):
-        key = jf.name[: -len(SUFFIX)]
-        for line in jf.read_text().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                merged.setdefault(key, []).append(json.loads(line))
-            except json.JSONDecodeError:
-                print(f"::warning::skipping malformed line in {jf.name}")
+    assayed: dict[str, list] = {}
+    for jf in sorted(streams_dir.rglob("*.jsonl")):
+        if jf.name.endswith(ASSAYED_SUFFIX):
+            # per-check tally (incl. clean/0) so absent resources are explicit
+            assayed.setdefault(jf.name[: -len(ASSAYED_SUFFIX)], []).extend(_read_jsonl(jf))
+        elif jf.name.endswith(SUFFIX):
+            merged.setdefault(jf.name[: -len(SUFFIX)], []).extend(_read_jsonl(jf))
+    if assayed:
+        merged["assayed"] = assayed
     return merged
 
 
@@ -47,7 +62,7 @@ def main() -> int:
         return 0
 
     merged = merge(streams_dir)
-    total = sum(len(v) for v in merged.values())
+    total = sum(len(v) for v in merged.values() if isinstance(v, list))
     out = streams_dir / "summary.json"
     try:
         out.write_text(json.dumps(merged, default=str, indent=2))

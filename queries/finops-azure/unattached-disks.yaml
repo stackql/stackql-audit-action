@@ -1,0 +1,14 @@
+id: azure-finops-unattached-disk
+name: Unattached managed disks
+severity: LOW
+description: |
+  Managed disks not attached to anything (managedBy is null). Billed per
+  GB-month while idle.
+remediation: |
+  Snapshot if needed, then DELETE FROM azure.compute.disks the orphaned disk.
+query: |
+  SELECT name, location, managedBy, properties
+  FROM azure.compute.disks
+  WHERE subscriptionId = '${SUBSCRIPTION_ID}'
+filter: azure_unattached_disk
+columns: [name, region, size_gb, estimated_monthly_usd]
