@@ -119,11 +119,15 @@ def _budget_line(budget: Budget, stopped_reason: str | None, skipped: int) -> st
 
 def _finalize_report(title: str, header_lines: list[str], checks: list[dict],
                      findings: dict[str, list[dict]], label: str | None,
-                     log_dir: Path, fail_on: str, fail_threshold: int) -> int:
+                     log_dir: Path, fail_on: str, fail_threshold: int,
+                     target: str = "") -> int:
     """Render the markdown summary + sections, emit outputs, return the exit code.
 
     If `label` is set, it's prepended as a column to each finding (e.g. which
-    project/region/subscription the finding came from)."""
+    project/region/subscription the finding came from). If `target` is set, an
+    assayed-tally is written so absent/clean resources are reported plainly in the
+    data output (not just silently missing): one row per check with its count and
+    status (clean / findings)."""
     by_sev = {k: 0 for k in audit.SEVERITY_ORDER}
     total = 0
     highest = "NONE"
@@ -153,6 +157,23 @@ def _finalize_report(title: str, header_lines: list[str], checks: list[dict],
     out.extend(sections)
     rendered = "\n".join(out)
     print(rendered)
+
+    # Assayed tally: one row per check, including the clean ones, so a resource
+    # absent from the client's space is told plainly in the data — not omitted.
+    if target:
+        try:
+            with open(_setup_stream_dir() / f"{target}-assayed.jsonl", "a", buffering=1) as af:
+                for c in checks:
+                    n = len(findings.get(c["_file"], []))
+                    af.write(json.dumps({
+                        "check": c["_file"],
+                        "name": c.get("name"),
+                        "severity": (c.get("severity") or "MEDIUM").upper(),
+                        "count": n,
+                        "status": "findings" if n else "clean",
+                    }) + "\n")
+        except OSError as e:
+            print(f"::warning::could not write assayed tally for {target}: {e}")
 
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
@@ -383,7 +404,7 @@ def run_s3() -> int:
         _budget_line(budget, stopped_reason, skipped),
     ]
     return _finalize_report("# StackQL S3 Audit", header, checks, findings, None,
-                            log_dir, fail_on, fail_threshold)
+                            log_dir, fail_on, fail_threshold, target="s3")
 
 
 # --- target: AWS all-regions sweep -----------------------------------------
@@ -438,7 +459,7 @@ def run_aws_regions(dirname: str = "aws", title: str = "# StackQL AWS All-Region
         _budget_line(budget, stopped_reason, skipped),
     ]
     return _finalize_report(title, header, checks, findings, "region",
-                            log_dir, fail_on, fail_threshold)
+                            log_dir, fail_on, fail_threshold, target=dirname)
 
 
 # --- target: GCP org descent ------------------------------------------------
@@ -517,7 +538,7 @@ def run_gcp_org(dirname: str = "google", title: str = "# StackQL GCP Org Audit",
         _budget_line(budget, stopped_reason, skipped),
     ]
     return _finalize_report(title, header, checks, findings, "project",
-                            log_dir, fail_on, fail_threshold)
+                            log_dir, fail_on, fail_threshold, target=dirname)
 
 
 # --- target: Azure management-group descent ---------------------------------
@@ -594,7 +615,7 @@ def run_azure_org(dirname: str = "azure", title: str = "# StackQL Azure Org Audi
         _budget_line(budget, stopped_reason, skipped),
     ]
     return _finalize_report(title, header, checks, findings, "subscription",
-                            log_dir, fail_on, fail_threshold)
+                            log_dir, fail_on, fail_threshold, target=dirname)
 
 
 # --- target: FinOps (orphan/unattached resources, costed from the snapshot) --
@@ -678,7 +699,7 @@ def run_entra() -> int:
         _budget_line(budget, stopped_reason, 0),
     ]
     return _finalize_report("# StackQL Entra ID Audit", header, checks, findings, None,
-                            log_dir, fail_on, fail_threshold)
+                            log_dir, fail_on, fail_threshold, target="entra")
 
 
 COMMANDS = {
