@@ -401,9 +401,10 @@ def enumerate_regions(seed_region: str, auth: str, log_dir: Path, budget: Budget
             if r.get("regionName") and (r.get("optInStatus") or "") in ("opt-in-not-required", "opted-in")]
 
 
-def run_aws_regions() -> int:
+def run_aws_regions(dirname: str = "aws", title: str = "# StackQL AWS All-Regions Audit",
+                    stream: str = "aws-regions-findings.jsonl") -> int:
     if not audit.provider_allowed("aws"):
-        print("::notice::skipping aws-regions: aws not in STACKQL_AUDIT_PROVIDERS")
+        print(f"::notice::skipping {dirname}: aws not in STACKQL_AUDIT_PROVIDERS")
         return 0
     seed = os.environ.get("AWS_REGION", "").strip()
     if not seed:
@@ -418,9 +419,9 @@ def run_aws_regions() -> int:
     action_path = Path(os.environ.get("ACTION_PATH", "."))
     filters_mod = audit.load_filters_module(action_path)
     log_dir = _setup_log_dir()
-    checks = load_checks(action_path, "aws", "aws")
+    checks = load_checks(action_path, dirname, "aws")
     if not checks:
-        print("::warning::no aws checks found in queries/aws/")
+        print(f"::warning::no checks found in queries/{dirname}/")
         return 0
 
     budget = Budget.from_env(os.environ)
@@ -431,12 +432,12 @@ def run_aws_regions() -> int:
 
     findings, stopped_reason, skipped, audited = _scope_fanout(
         "region", "AWS_REGION", regions, None, checks, auth,
-        filters_mod, log_dir, budget, parallel, "aws-regions-findings.jsonl")
+        filters_mod, log_dir, budget, parallel, stream)
     header = [
         f"**Regions audited:** {audited} / {len(regions)} enabled  ·  **Checks:** {len(checks)}",
         _budget_line(budget, stopped_reason, skipped),
     ]
-    return _finalize_report("# StackQL AWS All-Regions Audit", header, checks, findings, "region",
+    return _finalize_report(title, header, checks, findings, "region",
                             log_dir, fail_on, fail_threshold)
 
 
@@ -598,6 +599,10 @@ def run_azure_org(dirname: str = "azure", title: str = "# StackQL Azure Org Audi
 
 # --- target: FinOps (orphan/unattached resources, costed from the snapshot) --
 
+def run_finops_aws() -> int:
+    return run_aws_regions("finops-aws", "# StackQL AWS FinOps Audit", "finops-aws-findings.jsonl")
+
+
 def run_finops_gcp() -> int:
     return run_gcp_org("finops-gcp", "# StackQL GCP FinOps Audit", "finops-gcp-findings.jsonl")
 
@@ -682,6 +687,7 @@ COMMANDS = {
     "gcp-org": run_gcp_org,
     "azure-org": run_azure_org,
     "entra": run_entra,
+    "finops-aws": run_finops_aws,
     "finops-gcp": run_finops_gcp,
     "finops-azure": run_finops_azure,
 }

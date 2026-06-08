@@ -533,3 +533,35 @@ def azure_unassociated_public_ip(rows: list[dict]) -> list[dict]:
         out.append({**r, "region": region,
                     "estimated_monthly_usd": _monthly_cost("azure", "public-ip", region)})
     return out
+
+
+def _aws_region_from_az(az: str | None) -> str | None:
+    """us-east-1a -> us-east-1 (strip the trailing AZ letter)."""
+    if not az:
+        return None
+    return az[:-1] if az[-1].isalpha() else az
+
+
+def aws_unattached_volume(rows: list[dict]) -> list[dict]:
+    """EBS volumes in 'available' state (not attached to any instance)."""
+    out: list[dict] = []
+    for r in rows:
+        if (r.get("status") or "").lower() != "available":
+            continue
+        region = _aws_region_from_az(r.get("AvailabilityZone"))
+        out.append({**r, "region": region,
+                    "estimated_monthly_usd": _monthly_cost("aws", "block-storage", region, r.get("size"))})
+    return out
+
+
+def aws_unassociated_eip(rows: list[dict]) -> list[dict]:
+    """Elastic IPs not associated with an instance/ENI (idle, still billed).
+
+    The address row carries no region; EIP pricing is effectively flat, so cost
+    uses the global median (region=None). The fanout tags the row's region for display."""
+    out: list[dict] = []
+    for r in rows:
+        if r.get("associationId") or r.get("instanceId") or r.get("networkInterfaceId"):
+            continue
+        out.append({**r, "estimated_monthly_usd": _monthly_cost("aws", "public-ip", None)})
+    return out

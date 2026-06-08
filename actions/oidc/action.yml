@@ -7,7 +7,7 @@ branding:
 
 inputs:
   target:
-    description: 'Space-separated targets: s3 aws-regions gcp-org azure-org entra finops-gcp finops-azure. (finops-* cost orphan resources from the committed pricing snapshot.)'
+    description: 'Space-separated targets: s3 aws-regions gcp-org azure-org entra finops-aws finops-gcp finops-azure. (finops-* cost orphan resources from the committed pricing snapshot.)'
     required: false
     default: 's3 aws-regions gcp-org azure-org entra'
 
