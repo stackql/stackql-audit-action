@@ -565,3 +565,39 @@ def aws_unassociated_eip(rows: list[dict]) -> list[dict]:
             continue
         out.append({**r, "estimated_monthly_usd": _monthly_cost("aws", "public-ip", None)})
     return out
+
+
+def _advisor_monthly_savings(ext: dict) -> float | None:
+    """Azure Advisor cost recs carry a vendor savings figure in extendedProperties
+    (annualSavingsAmount, or savingsAmount). Normalize to monthly USD-ish."""
+    for key, div in (("annualSavingsAmount", 12), ("savingsAmount", 1)):
+        v = ext.get(key)
+        if v not in (None, ""):
+            try:
+                return round(float(v) / div, 2)
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def azure_advisor_cost(rows: list[dict]) -> list[dict]:
+    """Azure Advisor cost recommendations (vendor-computed right-size / shutdown of
+    underutilized resources). Tagged `suspected` — it's the vendor's signal, not our
+    proof — with their savings estimate."""
+    out: list[dict] = []
+    for r in rows:
+        p = _coerce_dict(r.get("properties"))
+        if (p.get("category") or "") != "Cost":
+            continue
+        sd = _coerce_dict(p.get("shortDescription"))
+        out.append({
+            "id": r.get("id"),
+            "resource": p.get("impactedValue"),
+            "impacted_field": p.get("impactedField"),
+            "impact": p.get("impact"),
+            "recommendation": sd.get("solution") or sd.get("problem"),
+            "category": "suspected",
+            "source": "azure-advisor",
+            "estimated_savings_usd": _advisor_monthly_savings(_coerce_dict(p.get("extendedProperties"))),
+        })
+    return out
