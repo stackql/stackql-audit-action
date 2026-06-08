@@ -258,7 +258,13 @@ def _scope_fanout(label: str, scope_var: str, scope_values: list[str], descent_s
                 c = next(x for x in checks if x["_file"] == cfile)
                 sev = c.get("severity", "MEDIUM").upper()
                 for r in rows:
-                    stream.write(json.dumps({label: v, "check": cfile, "name": c["name"], "severity": sev}) + "\n")
+                    _keep = {
+                        k: r[k] for k in (
+                            "estimated_monthly_usd",
+                            "volumeId", "publicIp", "address", "name", "size", "size_gb", "sizeGb",
+                        ) if k in r
+                    }
+                    stream.write(json.dumps({**_keep, label: v, "check": cfile, "name": c["name"], "severity": sev}) + "\n")
             # Surface errored (e.g. throttled) checks as UNKNOWN rather than dropping them.
             for e in errors:
                 stream.write(json.dumps({
