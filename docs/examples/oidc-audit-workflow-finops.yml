@@ -5,6 +5,9 @@ name: Cloud FinOps Audit (OIDC)
 # — no long-lived secrets.
 
 on:
+  push:
+    tags:
+      - 'audit-finops-oidc*'
   workflow_dispatch:
     inputs:
       aws-region:
@@ -26,9 +29,7 @@ on:
       max-nodes:
         description: 'Budget: max org-nodes visited (-1 = unlimited)'
         required: false
-        default: '-1'
-  schedule:
-    - cron: '0 6 * * 1'   # weekly waste sweep, Monday 06:00 UTC
+        default: '-1'   # weekly waste sweep, Monday 06:00 UTC
 
 jobs:
   finops-audit:
@@ -37,7 +38,7 @@ jobs:
       id-token: write       # required: GitHub OIDC token issuance
       contents: read
     steps:
-      - uses: stackql/stackql-audit-action/actions/oidc@v0.8   # pin a release that includes the finops-* targets
+      - uses: stackql/stackql-audit-action/actions/oidc@v0.9   # pin a release that includes the finops-* targets
         with:
           target: ${{ inputs.target || 'finops-aws finops-gcp finops-azure' }}
           # AWS (OIDC -> sts:AssumeRoleWithWebIdentity)
@@ -46,7 +47,7 @@ jobs:
           # GCP (Workload Identity Federation -> SA impersonation)
           gcp-workload-identity-provider: ${{ secrets.STACKQL_ID_FED_GCP_WORKLOAD_IDENTITY_PROVIDER }}
           gcp-sa-email: ${{ secrets.STACKQL_ID_FED_GCP_SERVICE_ACCOUNT }}
-          google-org-id: ${{ inputs.google-org-id }}
+          google-org-id: ${{ inputs.google-org-id || secrets.GCP_ORG_ID || '' }}
           # Azure (federated identity, no client secret — finops needs no Graph)
           azure-tenant-id: ${{ secrets.STACKQL_ID_FED_AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.STACKQL_ID_FED_AZURE_CLIENT_ID }}
@@ -59,3 +60,9 @@ jobs:
           # (deep-audit-data-streams: *-findings.jsonl + summary.json). No outbound
           # credentials — read-only, OIDC-only, nothing leaves GitHub.
           upload-logs: 'true'
+
+      - uses: actions/download-artifact@v4
+        id: download-data-streams
+        with:
+          name: deep-audit-data-streams
+          path: deep-audit-data-streams

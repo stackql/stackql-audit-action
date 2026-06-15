@@ -1,0 +1,11 @@
+id: gcp-finops-cluster-watch
+name: GKE clusters (watch)
+severity: LOW
+description: GKE clusters flagged for cost review (category=watch). Node cost is covered by compute watch.
+remediation: Confirm the cluster is needed; consolidate where possible.
+query: |
+  SELECT name, location, currentNodeCount, status
+  FROM google.container.clusters
+  WHERE projectsId = '${PROJECT_ID}' AND locationsId = '-'
+filter: gcp_gke_watch
+columns: [resource, type, region, node_count, monthly_run_rate_usd]

@@ -1,0 +1,14 @@
+id: gcp-finops-compute-watch
+name: Running Compute Engine instances (watch)
+severity: LOW
+description: |
+  Running GCE instances flagged for cost review (category=watch). Spend, not
+  proven waste — run-rate is populated once compute pricing lands.
+remediation: |
+  Review for right-sizing or shutdown; confirm each is justified.
+query: |
+  SELECT name, machineType, status, zone
+  FROM google.compute.instances
+  WHERE project = '${PROJECT_ID}'
+filter: gcp_compute_watch
+columns: [resource, type, region, monthly_run_rate_usd]
