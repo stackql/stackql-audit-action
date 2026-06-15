@@ -641,3 +641,38 @@ def azure_compute_watch(rows: list[dict]) -> list[dict]:
                     "type": _coerce_dict(props.get("hardwareProfile")).get("vmSize"),
                     "region": r.get("location"), "monthly_run_rate_usd": None})
     return out
+
+
+def aws_rds_watch(rows: list[dict]) -> list[dict]:
+    """RDS instances (managed DB) flagged for cost review."""
+    return [{"category": "watch", "kind": "db",
+             "resource": r.get("db_instance_identifier") or r.get("db_instance_arn"),
+             "type": r.get("db_instance_class"), "engine": r.get("engine"),
+             "region": r.get("region"), "monthly_run_rate_usd": None} for r in rows]
+
+
+def gcp_cloudsql_watch(rows: list[dict]) -> list[dict]:
+    """Cloud SQL instances flagged for cost review."""
+    return [{"category": "watch", "kind": "db", "resource": r.get("name"),
+             "type": _coerce_dict(r.get("settings")).get("tier"),
+             "engine": r.get("databaseVersion"), "region": r.get("region"),
+             "monthly_run_rate_usd": None} for r in rows]
+
+
+def aws_eks_watch(rows: list[dict]) -> list[dict]:
+    """EKS cluster control planes (nodes are covered by compute watch)."""
+    return [{"category": "watch", "kind": "cluster", "resource": r.get("id") or r.get("arn"),
+             "type": "eks", "region": r.get("region"), "monthly_run_rate_usd": None} for r in rows]
+
+
+def gcp_gke_watch(rows: list[dict]) -> list[dict]:
+    """GKE clusters (nodes are covered by compute watch)."""
+    return [{"category": "watch", "kind": "cluster", "resource": r.get("name"),
+             "type": "gke", "region": r.get("location"),
+             "node_count": r.get("currentNodeCount"), "monthly_run_rate_usd": None} for r in rows]
+
+
+def azure_aks_watch(rows: list[dict]) -> list[dict]:
+    """AKS managed clusters (nodes are covered by compute watch)."""
+    return [{"category": "watch", "kind": "cluster", "resource": r.get("id"),
+             "type": "aks", "region": r.get("location"), "monthly_run_rate_usd": None} for r in rows]

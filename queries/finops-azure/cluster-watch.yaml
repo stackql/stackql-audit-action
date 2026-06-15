@@ -1,0 +1,11 @@
+id: azure-finops-cluster-watch
+name: AKS clusters (watch)
+severity: LOW
+description: AKS managed clusters flagged for cost review (category=watch). Node cost is covered by compute watch.
+remediation: Confirm the cluster is needed; consolidate where possible.
+query: |
+  SELECT id, location, properties, sku
+  FROM azure.aks.managed_clusters
+  WHERE subscriptionId = '${SUBSCRIPTION_ID}'
+filter: azure_aks_watch
+columns: [resource, type, region, monthly_run_rate_usd]
