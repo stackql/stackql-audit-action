@@ -565,3 +565,114 @@ def aws_unassociated_eip(rows: list[dict]) -> list[dict]:
             continue
         out.append({**r, "estimated_monthly_usd": _monthly_cost("aws", "public-ip", None)})
     return out
+
+
+def _advisor_monthly_savings(ext: dict) -> float | None:
+    """Azure Advisor cost recs carry a vendor savings figure in extendedProperties
+    (annualSavingsAmount, or savingsAmount). Normalize to monthly USD-ish."""
+    for key, div in (("annualSavingsAmount", 12), ("savingsAmount", 1)):
+        v = ext.get(key)
+        if v not in (None, ""):
+            try:
+                return round(float(v) / div, 2)
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def azure_advisor_cost(rows: list[dict]) -> list[dict]:
+    """Azure Advisor cost recommendations (vendor-computed right-size / shutdown of
+    underutilized resources). Tagged `suspected` — it's the vendor's signal, not our
+    proof — with their savings estimate."""
+    out: list[dict] = []
+    for r in rows:
+        p = _coerce_dict(r.get("properties"))
+        if (p.get("category") or "") != "Cost":
+            continue
+        sd = _coerce_dict(p.get("shortDescription"))
+        out.append({
+            "id": r.get("id"),
+            "resource": p.get("impactedValue"),
+            "impacted_field": p.get("impactedField"),
+            "impact": p.get("impact"),
+            "recommendation": sd.get("solution") or sd.get("problem"),
+            "category": "suspected",
+            "source": "azure-advisor",
+            "estimated_savings_usd": _advisor_monthly_savings(_coerce_dict(p.get("extendedProperties"))),
+        })
+    return out
+
+
+# --- FinOps: watch — expensive running resources flagged for notice ----------
+# Inventory + type, tagged `watch` (spend, not proven waste). monthly_run_rate_usd
+# is null until the compute/db pricing classes land (GCP prices by vCPU+RAM, not
+# machine-type — a separate pricing effort); the type is captured so it's costable.
+
+def aws_compute_watch(rows: list[dict]) -> list[dict]:
+    """Running EC2 instances."""
+    out: list[dict] = []
+    for r in rows:
+        if (_coerce_dict(r.get("instanceState")).get("name") or "").lower() != "running":
+            continue
+        region = _aws_region_from_az(_coerce_dict(r.get("placement")).get("availabilityZone"))
+        out.append({"category": "watch", "kind": "compute", "resource": r.get("instanceId"),
+                    "type": r.get("instanceType"), "region": region, "monthly_run_rate_usd": None})
+    return out
+
+
+def gcp_compute_watch(rows: list[dict]) -> list[dict]:
+    """Running Compute Engine instances."""
+    out: list[dict] = []
+    for r in rows:
+        if (r.get("status") or "") != "RUNNING":
+            continue
+        out.append({"category": "watch", "kind": "compute", "resource": r.get("name"),
+                    "type": (r.get("machineType") or "").rsplit("/", 1)[-1],
+                    "region": _gcp_region(r), "monthly_run_rate_usd": None})
+    return out
+
+
+def azure_compute_watch(rows: list[dict]) -> list[dict]:
+    """Azure VMs (the list API doesn't carry power state, so all are flagged)."""
+    out: list[dict] = []
+    for r in rows:
+        props = _coerce_dict(r.get("properties"))
+        out.append({"category": "watch", "kind": "compute", "resource": r.get("id"),
+                    "type": _coerce_dict(props.get("hardwareProfile")).get("vmSize"),
+                    "region": r.get("location"), "monthly_run_rate_usd": None})
+    return out
+
+
+def aws_rds_watch(rows: list[dict]) -> list[dict]:
+    """RDS instances (managed DB) flagged for cost review."""
+    return [{"category": "watch", "kind": "db",
+             "resource": r.get("db_instance_identifier") or r.get("db_instance_arn"),
+             "type": r.get("db_instance_class"), "engine": r.get("engine"),
+             "region": r.get("region"), "monthly_run_rate_usd": None} for r in rows]
+
+
+def gcp_cloudsql_watch(rows: list[dict]) -> list[dict]:
+    """Cloud SQL instances flagged for cost review."""
+    return [{"category": "watch", "kind": "db", "resource": r.get("name"),
+             "type": _coerce_dict(r.get("settings")).get("tier"),
+             "engine": r.get("databaseVersion"), "region": r.get("region"),
+             "monthly_run_rate_usd": None} for r in rows]
+
+
+def aws_eks_watch(rows: list[dict]) -> list[dict]:
+    """EKS cluster control planes (nodes are covered by compute watch)."""
+    return [{"category": "watch", "kind": "cluster", "resource": r.get("id") or r.get("arn"),
+             "type": "eks", "region": r.get("region"), "monthly_run_rate_usd": None} for r in rows]
+
+
+def gcp_gke_watch(rows: list[dict]) -> list[dict]:
+    """GKE clusters (nodes are covered by compute watch)."""
+    return [{"category": "watch", "kind": "cluster", "resource": r.get("name"),
+             "type": "gke", "region": r.get("location"),
+             "node_count": r.get("currentNodeCount"), "monthly_run_rate_usd": None} for r in rows]
+
+
+def azure_aks_watch(rows: list[dict]) -> list[dict]:
+    """AKS managed clusters (nodes are covered by compute watch)."""
+    return [{"category": "watch", "kind": "cluster", "resource": r.get("id"),
+             "type": "aks", "region": r.get("location"), "monthly_run_rate_usd": None} for r in rows]

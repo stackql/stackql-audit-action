@@ -1,0 +1,14 @@
+id: azure-finops-compute-watch
+name: Azure VMs (watch)
+severity: LOW
+description: |
+  Azure virtual machines flagged for cost review (category=watch). Spend, not
+  proven waste — run-rate is populated once compute pricing lands.
+remediation: |
+  Review for right-sizing or deallocation; confirm each is justified.
+query: |
+  SELECT id, location, properties
+  FROM azure.compute.virtual_machines
+  WHERE subscriptionId = '${SUBSCRIPTION_ID}'
+filter: azure_compute_watch
+columns: [resource, type, region, monthly_run_rate_usd]

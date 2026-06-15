@@ -1,0 +1,14 @@
+id: aws-finops-compute-watch
+name: Running EC2 instances (watch)
+severity: LOW
+description: |
+  Running EC2 instances flagged for cost review (category=watch). Spend, not
+  proven waste — run-rate is populated once compute pricing lands.
+remediation: |
+  Review for right-sizing or shutdown; confirm each is justified.
+query: |
+  SELECT instanceId, instanceType, instanceState, placement
+  FROM aws.ec2_native.instances
+  WHERE region = '${AWS_REGION}'
+filter: aws_compute_watch
+columns: [resource, type, region, monthly_run_rate_usd]

@@ -1,0 +1,11 @@
+id: gcp-finops-db-watch
+name: Cloud SQL instances (watch)
+severity: LOW
+description: Cloud SQL instances flagged for cost review (category=watch). Run-rate populated once db pricing lands.
+remediation: Review tier for right-sizing; confirm justified.
+query: |
+  SELECT name, settings, databaseVersion, region
+  FROM google.sqladmin.instances
+  WHERE project = '${PROJECT_ID}'
+filter: gcp_cloudsql_watch
+columns: [resource, type, engine, region, monthly_run_rate_usd]

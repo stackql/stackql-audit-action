@@ -29,6 +29,8 @@ import json
 import os
 import random
 import re
+import shutil
+import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -630,6 +632,106 @@ def run_finops_aws() -> int:
     return run_aws_regions("finops-aws", "# StackQL AWS FinOps Audit", "finops-aws-findings.jsonl")
 
 
+# --- target: AWS rightsizing via Compute Optimizer (AWS CLI) -----------------
+# stackql has no Compute Optimizer provider, so we shell out to the AWS CLI
+# (already authed in the action). FinOps is the black box; stackql is just one
+# tool inside it. Reads finished vendor verdicts — no metrics math on our side.
+
+def _aws_cli_json(args: list[str], log_dir: Path, tag: str):
+    """Run `aws <args> --output json`; return (parsed, error). Logs stderr."""
+    out = subprocess.run(["aws", *args, "--output", "json"], capture_output=True, text=True, check=False)
+    try:
+        (log_dir / f"awscli__{tag}.log").write_text(
+            f"args: {' '.join(args)}\nexit: {out.returncode}\n--- stderr ---\n{out.stderr.strip() or '(empty)'}\n")
+    except OSError:
+        pass
+    if out.returncode != 0:
+        first = (out.stderr.strip().splitlines() or [f"exit {out.returncode}"])[0]
+        return None, first
+    try:
+        return json.loads(out.stdout or "{}"), None
+    except json.JSONDecodeError as e:
+        return None, f"bad json: {e}"
+
+
+def run_finops_aws_rightsizing() -> int:
+    if not audit.provider_allowed("aws"):
+        print("::notice::skipping finops-aws-rightsizing: aws not in STACKQL_AUDIT_PROVIDERS")
+        return 0
+    if not shutil.which("aws"):
+        print("::warning::aws CLI not found — skipping AWS rightsizing")
+        return 0
+    log_dir = _setup_log_dir()
+    stream_path = Path(os.environ.get("STACKQL_AUDIT_STREAM")
+                       or (_setup_stream_dir() / "finops-aws-rightsizing-findings.jsonl"))
+    seed = (os.environ.get("AWS_REGION", "") or "us-east-1").strip()
+
+    # Region list (CLI — keep it self-contained). Fall back to the seed region.
+    regions = [seed]
+    doc, err = _aws_cli_json(
+        ["ec2", "describe-regions", "--region", seed, "--query", "Regions[].RegionName"], log_dir, "regions")
+    if not err and isinstance(doc, list) and doc:
+        regions = doc
+
+    print(f"::notice::AWS Compute Optimizer across {len(regions)} region(s); streaming to {stream_path}")
+    findings = 0
+    errors = 0
+    with open(stream_path, "a", buffering=1) as stream:
+        for region in regions:
+            doc, err = _aws_cli_json(
+                ["compute-optimizer", "get-ec2-instance-recommendations", "--region", region],
+                log_dir, f"co_{region}")
+            if err:  # not enrolled / throttled / no access — surface, don't drop
+                errors += 1
+                stream.write(json.dumps({
+                    "region": region, "check": "_meta/enum-error",
+                    "name": "Compute Optimizer query failed", "severity": "UNKNOWN", "error": err}) + "\n")
+                print(f"::warning::compute-optimizer {region}: {err}")
+                continue
+            for rec in (doc or {}).get("instanceRecommendations", []):
+                if "over" not in (rec.get("finding") or "").lower():
+                    continue  # only over-provisioned yields savings
+                opts = rec.get("recommendationOptions") or []
+                savings = target_type = None
+                if opts:
+                    em = (opts[0].get("savingsOpportunity") or {}).get("estimatedMonthlySavings") or {}
+                    savings = em.get("value")
+                    target_type = opts[0].get("instanceType")
+                stream.write(json.dumps({
+                    "region": region,
+                    "resource": rec.get("instanceArn"),
+                    "instance_name": rec.get("instanceName"),
+                    "current_type": rec.get("currentInstanceType"),
+                    "recommended_type": target_type,
+                    "finding": rec.get("finding"),
+                    "category": "suspected",
+                    "source": "aws-compute-optimizer",
+                    "estimated_savings_usd": round(float(savings), 2) if savings not in (None, "") else None,
+                    "check": "compute-optimizer/ec2",
+                    "name": "Over-provisioned EC2 instance",
+                    "severity": "LOW",
+                }) + "\n")
+                findings += 1
+
+    try:
+        with open(_setup_stream_dir() / "finops-aws-rightsizing-assayed.jsonl", "a", buffering=1) as af:
+            af.write(json.dumps({
+                "check": "compute-optimizer/ec2", "name": "Over-provisioned EC2 instance",
+                "severity": "LOW", "count": findings, "status": "findings" if findings else "clean"}) + "\n")
+    except OSError:
+        pass
+
+    summary = (f"# StackQL AWS Rightsizing (Compute Optimizer)\n\n"
+               f"**Regions:** {len(regions)}  ·  **Over-provisioned instances:** {findings}  ·  "
+               f"**Region errors:** {errors}\n")
+    print(summary)
+    gh = os.environ.get("GITHUB_STEP_SUMMARY")
+    if gh:
+        with open(gh, "a") as f:
+            f.write(summary + "\n")
+    return 0
+
+
 def run_finops_gcp() -> int:
     return run_gcp_org("finops-gcp", "# StackQL GCP FinOps Audit", "finops-gcp-findings.jsonl")
 
@@ -715,6 +817,7 @@ COMMANDS = {
     "azure-org": run_azure_org,
     "entra": run_entra,
     "finops-aws": run_finops_aws,
+    "finops-aws-rightsizing": run_finops_aws_rightsizing,
     "finops-gcp": run_finops_gcp,
     "finops-azure": run_finops_azure,
 }
