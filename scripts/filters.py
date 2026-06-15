@@ -601,3 +601,43 @@ def azure_advisor_cost(rows: list[dict]) -> list[dict]:
             "estimated_savings_usd": _advisor_monthly_savings(_coerce_dict(p.get("extendedProperties"))),
         })
     return out
+
+
+# --- FinOps: watch — expensive running resources flagged for notice ----------
+# Inventory + type, tagged `watch` (spend, not proven waste). monthly_run_rate_usd
+# is null until the compute/db pricing classes land (GCP prices by vCPU+RAM, not
+# machine-type — a separate pricing effort); the type is captured so it's costable.
+
+def aws_compute_watch(rows: list[dict]) -> list[dict]:
+    """Running EC2 instances."""
+    out: list[dict] = []
+    for r in rows:
+        if (_coerce_dict(r.get("instanceState")).get("name") or "").lower() != "running":
+            continue
+        region = _aws_region_from_az(_coerce_dict(r.get("placement")).get("availabilityZone"))
+        out.append({"category": "watch", "kind": "compute", "resource": r.get("instanceId"),
+                    "type": r.get("instanceType"), "region": region, "monthly_run_rate_usd": None})
+    return out
+
+
+def gcp_compute_watch(rows: list[dict]) -> list[dict]:
+    """Running Compute Engine instances."""
+    out: list[dict] = []
+    for r in rows:
+        if (r.get("status") or "") != "RUNNING":
+            continue
+        out.append({"category": "watch", "kind": "compute", "resource": r.get("name"),
+                    "type": (r.get("machineType") or "").rsplit("/", 1)[-1],
+                    "region": _gcp_region(r), "monthly_run_rate_usd": None})
+    return out
+
+
+def azure_compute_watch(rows: list[dict]) -> list[dict]:
+    """Azure VMs (the list API doesn't carry power state, so all are flagged)."""
+    out: list[dict] = []
+    for r in rows:
+        props = _coerce_dict(r.get("properties"))
+        out.append({"category": "watch", "kind": "compute", "resource": r.get("id"),
+                    "type": _coerce_dict(props.get("hardwareProfile")).get("vmSize"),
+                    "region": r.get("location"), "monthly_run_rate_usd": None})
+    return out
