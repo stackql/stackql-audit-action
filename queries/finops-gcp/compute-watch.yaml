@@ -7,7 +7,7 @@ description: |
 remediation: |
   Review for right-sizing or shutdown; confirm each is justified.
 query: |
-  SELECT name, machineType, status, zone, region
+  SELECT name, machineType, status, zone
   FROM google.compute.instances
   WHERE project = '${PROJECT_ID}'
 filter: gcp_compute_watch

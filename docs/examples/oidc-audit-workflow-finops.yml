@@ -22,7 +22,7 @@ on:
       target:
         description: Space-separated FinOps targets
         required: false
-        default: finops-aws finops-aws-rightsizing finops-gcp finops-azure
+        default: finops-aws finops-gcp finops-azure
       max-nodes:
         description: 'Budget: max org-nodes visited (-1 = unlimited)'
         required: false
@@ -39,7 +39,7 @@ jobs:
     steps:
       - uses: stackql/stackql-audit-action/actions/oidc@v0.8   # pin a release that includes the finops-* targets
         with:
-          target: ${{ inputs.target || 'finops-aws finops-aws-rightsizing finops-gcp finops-azure' }}
+          target: ${{ inputs.target || 'finops-aws finops-gcp finops-azure' }}
           # AWS (OIDC -> sts:AssumeRoleWithWebIdentity)
           aws-role-arn: ${{ secrets.STACKQL_ID_FED_AWS_ROLE_ARN }}
           aws-region: ${{ inputs.aws-region || 'us-east-1' }}
