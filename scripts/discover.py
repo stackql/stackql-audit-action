@@ -177,6 +177,31 @@ def _finalize_report(title: str, header_lines: list[str], checks: list[dict],
         except OSError as e:
             print(f"::warning::could not write assayed tally for {target}: {e}")
 
+        # Rich, fully-traceable rows for downstream/recommendation agents: every
+        # result row + the check/query that produced it + the full field set,
+        # independent of severity (so an agent can act on e.g. all kind=compute).
+        rid = os.environ.get("GITHUB_RUN_ID") or os.environ.get("RUN_STAMP") or ""
+        try:
+            with open(_setup_stream_dir() / f"{target}-rows.jsonl", "a", buffering=1) as rf:
+                for c in checks:
+                    for row in findings.get(c["_file"], []):
+                        rf.write(json.dumps({
+                            "run_id": rid,
+                            "target": target,
+                            "provider": c.get("_provider"),
+                            "check_id": c.get("id"),
+                            "check_file": c.get("_file"),
+                            "check_name": c.get("name"),
+                            "query": (c.get("query") or "").strip(),
+                            "severity": (c.get("severity") or "MEDIUM").upper(),
+                            "category": row.get("category"),
+                            "kind": row.get("kind"),
+                            "region": row.get("region"),
+                            "fields": row,
+                        }, default=str) + "\n")
+        except OSError as e:
+            print(f"::warning::could not write rows for {target}: {e}")
+
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a") as f:

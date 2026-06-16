@@ -22,6 +22,7 @@ SUFFIX = "-findings.jsonl"
 
 
 ASSAYED_SUFFIX = "-assayed.jsonl"
+ROWS_SUFFIX = "-rows.jsonl"
 
 
 def _read_jsonl(path: Path) -> list:
@@ -69,6 +70,20 @@ def main() -> int:
         print(f"::notice::wrote {out} ({len(merged)} stream(s), {total} record(s))")
     except OSError as e:
         print(f"::warning::could not write summary.json: {e}")
+
+    # findings.json — flat, fully-traceable result rows (every row + its
+    # originating check/query + full fields) for downstream/agent consumption.
+    # Written alongside summary.json (same folder => same uploaded artifact);
+    # summary.json is untouched.
+    rows: list = []
+    for jf in sorted(streams_dir.rglob("*" + ROWS_SUFFIX)):
+        rows.extend(_read_jsonl(jf))
+    findings_out = streams_dir / "findings.json"
+    try:
+        findings_out.write_text(json.dumps({"findings": rows}, default=str, indent=2))
+        print(f"::notice::wrote {findings_out} ({len(rows)} traceable row(s))")
+    except OSError as e:
+        print(f"::warning::could not write findings.json: {e}")
     return 0
 
 
