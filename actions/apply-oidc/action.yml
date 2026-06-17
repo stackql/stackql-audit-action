@@ -1,0 +1,189 @@
+name: 'StackQL Apply (OIDC)'
+description: 'Execute mutating remediation .sql once approved. Federated (OIDC) auth, no long-lived secrets. Dry-run by default; fail-closed unless a passing preflight result is supplied.'
+author: 'StackQL'
+branding:
+  icon: 'tool'
+  color: 'orange'
+
+inputs:
+  glob:
+    description: 'Repo-relative glob of .sql files to run (mutating).'
+    required: true
+  working-directory:
+    description: 'Directory the glob is resolved against.'
+    required: false
+    default: ${{ github.workspace }}
+  dry-run:
+    description: 'When true, parse + log every statement but never execute mutations.'
+    required: false
+    default: 'true'
+  require-preflight-pass:
+    description: 'Fail-closed: refuse to mutate unless a passing preflight result is supplied.'
+    required: false
+    default: 'true'
+  preflight-results:
+    description: 'Path to a results-json from a prior preflight step. Required when dry-run=false and require-preflight-pass=true.'
+    required: false
+    default: ''
+  max-parallel:
+    description: 'Files run in parallel (default 1 = serial; mutation parallelism is opt-in). Currently serial regardless — reserved.'
+    required: false
+    default: '1'
+  per-file-timeout-seconds:
+    description: 'Hard cap per .sql file.'
+    required: false
+    default: '60'
+  retries:
+    description: 'Throttle retries per statement.'
+    required: false
+    default: '3'
+  stackql-version:
+    description: 'stackql release to install (or "latest").'
+    required: false
+    default: 'latest'
+  # --- federated auth (mirrors actions/oidc) ---
+  aws-role-arn:
+    description: 'AWS role ARN to assume (OIDC). Needs narrow mutate permissions.'
+    required: false
+    default: ''
+  aws-region:
+    description: 'AWS region.'
+    required: false
+    default: ''
+  aws-provider-version:
+    description: 'stackql AWS provider version (blank = latest).'
+    required: false
+    default: ''
+  gcp-workload-identity-provider:
+    description: 'GCP workload identity provider.'
+    required: false
+    default: ''
+  gcp-sa-email:
+    description: 'GCP service account email (narrow mutate permissions).'
+    required: false
+    default: ''
+  google-provider-version:
+    description: 'stackql Google provider version (blank = latest).'
+    required: false
+    default: ''
+  azure-tenant-id:
+    description: 'Azure AD tenant ID.'
+    required: false
+    default: ''
+  azure-client-id:
+    description: 'Azure AD application (client) ID.'
+    required: false
+    default: ''
+  azure-subscription-id:
+    description: 'Azure subscription ID.'
+    required: false
+    default: ''
+  azure-provider-version:
+    description: 'stackql Azure provider version (blank = latest).'
+    required: false
+    default: ''
+  entra-provider-version:
+    description: 'stackql entra_id provider version (blank = latest).'
+    required: false
+    default: ''
+
+outputs:
+  results-json:
+    description: 'Path to the JSON results file.'
+    value: ${{ steps.run.outputs.results-json }}
+  summary-md:
+    description: 'Path to the markdown summary.'
+    value: ${{ steps.run.outputs.summary-md }}
+  pass:
+    description: "'true' iff every statement returned exit 0."
+    value: ${{ steps.run.outputs.pass }}
+  mutations-applied:
+    description: 'Integer string; 0 in dry-run regardless of file content.'
+    value: ${{ steps.run.outputs.mutations-applied }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup stackql + providers
+      shell: bash
+      env:
+        STACKQL_VERSION: ${{ inputs.stackql-version }}
+        AWS_ROLE: ${{ inputs.aws-role-arn }}
+        GCP_WIF: ${{ inputs.gcp-workload-identity-provider }}
+        AZURE_TENANT: ${{ inputs.azure-tenant-id }}
+        AWS_VER: ${{ inputs.aws-provider-version }}
+        GOOGLE_VER: ${{ inputs.google-provider-version }}
+        AZURE_VER: ${{ inputs.azure-provider-version }}
+        ENTRA_VER: ${{ inputs.entra-provider-version }}
+      run: |
+        set -euo pipefail
+        ACTION_PATH="$(cd "${{ github.action_path }}/../.." && pwd)"
+        specs=()
+        [ -n "$AWS_ROLE" ]     && specs+=("aws:${AWS_VER}")
+        [ -n "$GCP_WIF" ]      && specs+=("google:${GOOGLE_VER}")
+        [ -n "$AZURE_TENANT" ] && { specs+=("azure:${AZURE_VER}"); specs+=("entra_id:${ENTRA_VER}"); }
+        bash "${ACTION_PATH}/scripts/setup_stackql.sh" "${STACKQL_VERSION}" "${specs[@]}"
+
+    - name: ID Fed - configure AWS credentials (OIDC)
+      id: aws_auth
+      if: inputs.aws-role-arn != ''
+      continue-on-error: true
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.aws-role-arn }}
+        aws-region: ${{ inputs.aws-region || 'us-east-1' }}
+
+    - name: ID Fed - authenticate to Google Cloud (OIDC)
+      id: gcp_auth
+      if: inputs.gcp-workload-identity-provider != '' && inputs.gcp-sa-email != ''
+      continue-on-error: true
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ inputs.gcp-workload-identity-provider }}
+        service_account: ${{ inputs.gcp-sa-email }}
+        token_format: 'access_token'
+
+    - name: ID Fed - login to Azure (OIDC)
+      id: azure_auth
+      if: inputs.azure-client-id != '' && inputs.azure-tenant-id != ''
+      continue-on-error: true
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        subscription-id: ${{ inputs.azure-subscription-id }}
+        allow-no-subscriptions: true
+
+    - name: Apply
+      id: run
+      shell: bash
+      env:
+        RUN_SQL_MODE: apply
+        RUN_SQL_GLOB: ${{ inputs.glob }}
+        RUN_SQL_WORKDIR: ${{ inputs.working-directory }}
+        RUN_SQL_DRY_RUN: ${{ inputs.dry-run }}
+        RUN_SQL_REQUIRE_PREFLIGHT: ${{ inputs.require-preflight-pass }}
+        RUN_SQL_PREFLIGHT_RESULTS: ${{ inputs.preflight-results }}
+        RUN_SQL_MAX_PARALLEL: ${{ inputs.max-parallel }}
+        RUN_SQL_FILE_TIMEOUT: ${{ inputs.per-file-timeout-seconds }}
+        RUN_SQL_RETRIES: ${{ inputs.retries }}
+        AWS_REGION: ${{ inputs.aws-region }}
+        GCP_ACCESS_TOKEN: ${{ steps.gcp_auth.outputs.access_token }}
+        GCP_AUTH_OK: ${{ steps.gcp_auth.outcome == 'success' }}
+        AZURE_AUTH_OK: ${{ steps.azure_auth.outcome == 'success' }}
+      run: |
+        set -uo pipefail
+        ACTION_PATH="$(cd "${{ github.action_path }}/../.." && pwd)"
+        auth=()
+        [ "$GCP_AUTH_OK" = "true" ] && auth+=('"google":{"type":"bearer","credentialsenvvar":"GCP_ACCESS_TOKEN"}')
+        if [ "$AZURE_AUTH_OK" = "true" ]; then
+          export AZURE_ARM_TOKEN="$(az account get-access-token --resource https://management.azure.com/ --query accessToken -o tsv)"
+          export AZURE_GRAPH_TOKEN="$(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv)"
+          auth+=('"azure":{"type":"bearer","credentialsenvvar":"AZURE_ARM_TOKEN"}')
+          auth+=('"entra_id":{"type":"bearer","credentialsenvvar":"AZURE_GRAPH_TOKEN"}')
+        fi
+        if [ "${#auth[@]}" -gt 0 ]; then IFS=','; export STACKQL_AUDIT_AUTH="{${auth[*]}}"; unset IFS; fi
+        python3 -m pip install --quiet -r "${ACTION_PATH}/cicd/requirements.txt"
+        python3 "${ACTION_PATH}/scripts/run_sql_files.py"; code=$?
+        cat "${RUNNER_TEMP}/apply-summary.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+        exit $code
