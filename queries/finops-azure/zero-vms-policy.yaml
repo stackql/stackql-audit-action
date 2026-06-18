@@ -1,0 +1,16 @@
+id: azure-finops-zero-vms-policy
+name: Active Azure VM (zero-VMs policy)
+severity: HIGH
+description: |
+  Policy: zero active VMs. Every Azure VM returned by the list API is treated
+  as a finding to be killed. (The list API does not surface power state;
+  preflight should re-check power state with instanceView before mutation.)
+remediation: |
+  Delete the VM.
+  stackql: DELETE FROM azure.compute.virtual_machines WHERE subscriptionId = '<sub>' AND resourceGroupName = '<rg>' AND vmName = '<name>';
+query: |
+  SELECT id, name, location, resourceGroupName, properties
+  FROM azure.compute.virtual_machines
+  WHERE subscriptionId = '${SUBSCRIPTION_ID}'
+filter: azure_zero_vms_policy
+columns: [name, resourceGroupName, region, vmSize, id]

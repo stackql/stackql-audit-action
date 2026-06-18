@@ -1,0 +1,16 @@
+id: aws-finops-zero-vms-policy
+name: Active EC2 instance (zero-VMs policy)
+severity: HIGH
+description: |
+  Policy: zero active VMs. Any EC2 instance not in 'terminated' state is a
+  finding to be killed. Distinct from compute-watch (LOW, advisory): this is
+  a hard policy and every match should be proposed for termination.
+remediation: |
+  Terminate the instance.
+  stackql: DELETE FROM aws.ec2_native.instances WHERE region = '<region>' AND data__Identifier = '<instanceId>';
+query: |
+  SELECT instanceId, instanceType, instanceState, placement
+  FROM aws.ec2_native.instances
+  WHERE region = '${AWS_REGION}'
+filter: aws_zero_vms_policy
+columns: [instanceId, instanceType, region, instanceState]

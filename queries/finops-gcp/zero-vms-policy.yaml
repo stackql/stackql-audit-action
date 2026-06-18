@@ -1,0 +1,15 @@
+id: gcp-finops-zero-vms-policy
+name: Active Compute Engine instance (zero-VMs policy)
+severity: HIGH
+description: |
+  Policy: zero active VMs. Any GCE instance not in 'TERMINATED' state is a
+  finding to be killed. Distinct from compute-watch (LOW, advisory).
+remediation: |
+  Delete the instance.
+  stackql: DELETE FROM google.compute.instances WHERE project = '<project>' AND zone = '<zone>' AND instance = '<name>';
+query: |
+  SELECT name, machineType, status, zone, selfLink
+  FROM google.compute.instances
+  WHERE project = '${PROJECT_ID}'
+filter: gcp_zero_vms_policy
+columns: [name, machineType, region, zone, status]

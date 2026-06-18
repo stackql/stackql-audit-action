@@ -676,3 +676,46 @@ def azure_aks_watch(rows: list[dict]) -> list[dict]:
     """AKS managed clusters (nodes are covered by compute watch)."""
     return [{"category": "watch", "kind": "cluster", "resource": r.get("id"),
              "type": "aks", "region": r.get("location"), "monthly_run_rate_usd": None} for r in rows]
+
+
+# --- zero-VMs policy: every active VM is a finding to kill ----------------
+# Hard policy, severity HIGH. Distinct from *_compute_watch (LOW, advisory).
+# Output keeps the raw row plus a kill-friendly handle so the remediation
+# agent has enough to author the DELETE statement.
+
+
+def aws_zero_vms_policy(rows: list[dict]) -> list[dict]:
+    """EC2 instances not yet terminated. ('terminated' is the only kill end-state.)"""
+    out: list[dict] = []
+    for r in rows:
+        state = (_coerce_dict(r.get("instanceState")).get("name") or "").lower()
+        if state == "terminated":
+            continue
+        region = _aws_region_from_az(_coerce_dict(r.get("placement")).get("availabilityZone"))
+        out.append({**r, "region": region, "instanceState": state})
+    return out
+
+
+def gcp_zero_vms_policy(rows: list[dict]) -> list[dict]:
+    """GCE instances not yet terminated. (TERMINATED here means stopped, not deleted.)"""
+    out: list[dict] = []
+    for r in rows:
+        status = (r.get("status") or "").upper()
+        if status == "TERMINATED":
+            continue
+        zone = (r.get("zone") or "").rsplit("/", 1)[-1]
+        machine_type = (r.get("machineType") or "").rsplit("/", 1)[-1]
+        out.append({**r, "zone": zone, "machineType": machine_type,
+                    "region": _gcp_region(r), "status": status})
+    return out
+
+
+def azure_zero_vms_policy(rows: list[dict]) -> list[dict]:
+    """All Azure VMs from the list API. Power state is unavailable here;
+    the remediation preflight must re-check via instanceView before kill."""
+    out: list[dict] = []
+    for r in rows:
+        props = _coerce_dict(r.get("properties"))
+        vm_size = _coerce_dict(props.get("hardwareProfile")).get("vmSize")
+        out.append({**r, "region": r.get("location"), "vmSize": vm_size})
+    return out
