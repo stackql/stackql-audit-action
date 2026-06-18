@@ -493,7 +493,7 @@ def gcp_unattached_disk(rows: list[dict]) -> list[dict]:
             continue
         region = _gcp_region(r)
         out.append({**r, "region": region,
-                    "estimated_monthly_usd": _monthly_cost("gcp", "block-storage", region, r.get("sizeGb"))})
+                    "category": "waste", "estimated_monthly_usd": _monthly_cost("gcp", "block-storage", region, r.get("sizeGb"))})
     return out
 
 
@@ -505,7 +505,7 @@ def gcp_unused_address(rows: list[dict]) -> list[dict]:
             continue
         region = _gcp_region(r)
         out.append({**r, "region": region,
-                    "estimated_monthly_usd": _monthly_cost("gcp", "public-ip", region)})
+                    "category": "waste", "estimated_monthly_usd": _monthly_cost("gcp", "public-ip", region)})
     return out
 
 
@@ -519,7 +519,7 @@ def azure_unattached_disk(rows: list[dict]) -> list[dict]:
         size = props.get("diskSizeGB")
         region = r.get("location")
         out.append({**r, "region": region, "size_gb": size,
-                    "estimated_monthly_usd": _monthly_cost("azure", "block-storage", region, size)})
+                    "category": "waste", "estimated_monthly_usd": _monthly_cost("azure", "block-storage", region, size)})
     return out
 
 
@@ -531,7 +531,7 @@ def azure_unassociated_public_ip(rows: list[dict]) -> list[dict]:
             continue
         region = r.get("location")
         out.append({**r, "region": region,
-                    "estimated_monthly_usd": _monthly_cost("azure", "public-ip", region)})
+                    "category": "waste", "estimated_monthly_usd": _monthly_cost("azure", "public-ip", region)})
     return out
 
 
@@ -550,7 +550,7 @@ def aws_unattached_volume(rows: list[dict]) -> list[dict]:
             continue
         region = _aws_region_from_az(r.get("AvailabilityZone"))
         out.append({**r, "region": region,
-                    "estimated_monthly_usd": _monthly_cost("aws", "block-storage", region, r.get("size"))})
+                    "category": "waste", "estimated_monthly_usd": _monthly_cost("aws", "block-storage", region, r.get("size"))})
     return out
 
 
@@ -563,7 +563,7 @@ def aws_unassociated_eip(rows: list[dict]) -> list[dict]:
     for r in rows:
         if r.get("associationId") or r.get("instanceId") or r.get("networkInterfaceId"):
             continue
-        out.append({**r, "estimated_monthly_usd": _monthly_cost("aws", "public-ip", None)})
+        out.append({**r, "category": "waste", "estimated_monthly_usd": _monthly_cost("aws", "public-ip", None)})
     return out
 
 

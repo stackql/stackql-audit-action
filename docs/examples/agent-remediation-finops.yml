@@ -1,0 +1,94 @@
+name: Agent Remediation (FinOps, OIDC)
+
+# Full LLM-in-the-loop remediation pipeline:
+#   1. audit  -> findings.json (rich, traceable)
+#   2. claude-code-action reads findings.json and WRITES proposal files
+#   3. (optional) preflight re-verifies each proposal read-only
+#
+# The agent step below is the corrected form. The common failure — "no proposals
+# generated" — is NOT the model: it's that `claude_args` was empty, so Write/Edit
+# were not permitted, and `show_full_output`/`display_report` were false, so the
+# run hid what it did. Both are fixed here.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  finops-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: stackql/stackql-audit-action/actions/oidc@v0.11
+        with:
+          target: finops-aws finops-gcp finops-azure
+          stackql-version: latest          # pin >= the provider minimum; NOT v0.1.1
+          aws-role-arn: ${{ secrets.STACKQL_ID_FED_AWS_ROLE_ARN }}
+          aws-region: us-east-1
+          gcp-workload-identity-provider: ${{ secrets.STACKQL_ID_FED_GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          gcp-sa-email: ${{ secrets.STACKQL_ID_FED_GCP_SERVICE_ACCOUNT }}
+          google-org-id: ${{ secrets.STACKQL_GCP_ORG_ID }}
+          azure-tenant-id: ${{ secrets.STACKQL_ID_FED_AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.STACKQL_ID_FED_AZURE_CLIENT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_INTEGRATION_TESTING_SUB_ID }}
+          upload-logs: 'true'
+
+      # findings.json is written under deep-audit-data-streams/<run>/findings.json.
+      # Resolve it for the agent prompt.
+      - id: findings
+        shell: bash
+        run: |
+          set -euo pipefail
+          f="$(find "${{ github.workspace }}/deep-audit-data-streams" -name findings.json | head -1)"
+          echo "path=$f" >> "$GITHUB_OUTPUT"
+          echo "::notice::findings at $f"
+
+      - name: Generate remediation proposals (LLM)
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          # THE FIX: allow file-writing tools, and make the run observable.
+          claude_args: "--allowedTools Read,Write,Edit,Bash --permissionMode acceptEdits"
+          show_full_output: true     # tool calls visible in the job log
+          display_report: true       # summary in the step summary
+          prompt: |
+            Read ${{ steps.findings.outputs.path }}. Shape:
+            { "findings": [ { run_id, target, provider, check_id, check_file,
+              check_name, query, severity, region, category, fields:{...} }, ... ] }
+
+            For each finding with category == "waste" (index i, 0-based) create:
+              remediations/proposed/${{ github.run_id }}/<i>-<check_id>-<resource_id>/
+            <resource_id> = first present of fields.volumeId, publicIp, address, name
+            (sanitise to [a-zA-Z0-9._-]).
+
+            Write exactly four files per directory:
+              finding.json    — the .findings[i] object verbatim
+              preflight.sql   — stackql SELECT(s) re-verifying the resource still
+                                meets the check criteria (read-only; no DML)
+              remediation.sql — stackql DELETE/UPDATE disposing the resource
+              rationale.md    — what is removed, why it is safe, what preflight
+                                verifies, estimated monthly saving
+            Skip category != "waste". Do not modify files outside remediations/proposed/.
+            Do not execute remediation. Do not open PRs.
+
+      # Optional: read-only re-verify what the agent proposed, before any human approval.
+      - uses: stackql/stackql-audit-action/actions/preflight-oidc@v0.11
+        if: ${{ hashFiles(format('remediations/proposed/{0}/**/preflight.sql', github.run_id)) != '' }}
+        with:
+          glob: 'remediations/proposed/${{ github.run_id }}/**/preflight.sql'
+          aws-role-arn: ${{ secrets.STACKQL_ID_FED_AWS_ROLE_ARN }}   # read-only role
+          aws-region: us-east-1
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: remediation-proposals
+          path: remediations/proposed/
+          if-no-files-found: warn

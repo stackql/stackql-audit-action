@@ -12,3 +12,12 @@ query: |
   WHERE region = '${AWS_REGION}'
 filter: aws_unattached_volume
 columns: [volumeId, region, size, estimated_monthly_usd]
+remediation_sql:
+  # Re-verify the volume is still 'available' (read-only); pass = still orphaned.
+  preflight: |
+    SELECT volumeId, status FROM aws.ec2_native.volumes
+    WHERE region = '${region}' AND volumeId = '${volumeId}'
+  # Delete the orphaned volume via Cloud Control (DeleteVolume).
+  apply: |
+    DELETE FROM aws.ec2.volumes
+    WHERE region = '${region}' AND data__Identifier = '${volumeId}'
