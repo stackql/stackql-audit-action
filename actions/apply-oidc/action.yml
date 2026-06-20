@@ -176,7 +176,6 @@ runs:
         set -uo pipefail
         ACTION_PATH="$(cd "${{ github.action_path }}/../.." && pwd)"
         auth=()
-        [ "$AWS_AUTH_OK" = "true" ] && auth+=('"aws":{"type":"aws_signing_v4","keyIDenvvar":"AWS_ACCESS_KEY_ID","credentialsenvvar":"AWS_SECRET_ACCESS_KEY"}')
         [ "$GCP_AUTH_OK" = "true" ] && auth+=('"google":{"type":"bearer","credentialsenvvar":"GCP_ACCESS_TOKEN"}')
         if [ "$AZURE_AUTH_OK" = "true" ]; then
           export AZURE_ARM_TOKEN="$(az account get-access-token --resource https://management.azure.com/ --query accessToken -o tsv)"

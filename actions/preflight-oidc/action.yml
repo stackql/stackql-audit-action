@@ -161,10 +161,10 @@ runs:
         echo "::notice::ID-fed outcomes — aws=${AWS_AUTH_OUTCOME:-skipped} gcp=${{ steps.gcp_auth.outcome }} azure=${{ steps.azure_auth.outcome }}"
         [ -n "${AWS_AUTH_OUTCOME:-}" ] && [ "$AWS_AUTH_OK" != "true" ] && \
           echo "::warning::AWS OIDC login did not succeed (outcome=${AWS_AUTH_OUTCOME}). AWS queries will return 0 rows. The AWS role likely does not trust this workflow's OIDC subject (e.g. pull_request) — add it to the role trust policy."
-        # AWS must be in the --auth payload: with --auth set, stackql does not fall
-        # back to env for omitted providers, so the AWS query returns 0 rows.
+        # AWS authenticates from the env creds configure-aws-credentials set
+        # (full SDK chain incl AWS_SESSION_TOKEN) — same as the working audit.
+        # Only gcp/azure need the bearer bridge below.
         auth=()
-        [ "$AWS_AUTH_OK" = "true" ] && auth+=('"aws":{"type":"aws_signing_v4","keyIDenvvar":"AWS_ACCESS_KEY_ID","credentialsenvvar":"AWS_SECRET_ACCESS_KEY"}')
         [ "$GCP_AUTH_OK" = "true" ] && auth+=('"google":{"type":"bearer","credentialsenvvar":"GCP_ACCESS_TOKEN"}')
         if [ "$AZURE_AUTH_OK" = "true" ]; then
           export AZURE_ARM_TOKEN="$(az account get-access-token --resource https://management.azure.com/ --query accessToken -o tsv)"
