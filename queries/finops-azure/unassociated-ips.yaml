@@ -6,8 +6,14 @@ description: |
 remediation: |
   Release with DELETE FROM azure.network.public_ip_addresses if unused.
 query: |
-  SELECT name, location, properties
+  SELECT id, name, location, properties
   FROM azure.network.public_ip_addresses
   WHERE subscriptionId = '${SUBSCRIPTION_ID}'
 filter: azure_unassociated_public_ip
 columns: [name, region, estimated_monthly_usd]
+suggested_remediation:
+  type: delete
+  description: Release the unassociated public IP address.
+  sql_query: |
+    DELETE FROM azure.network.public_ip_addresses
+    WHERE subscriptionId = '${subscriptionId}' AND resourceGroupName = '${resourceGroupName}' AND publicIpAddressName = '${name}'

@@ -5,10 +5,17 @@ description: |
   Elastic IPs not associated with an instance or network interface (no
   associationId). Idle EIPs (and all public IPv4) are billed hourly.
 remediation: |
-  Release with DELETE FROM aws.ec2_native.addresses if no longer needed.
+  Release the Elastic IP (ReleaseAddress) if no longer needed.
 query: |
   SELECT publicIp, allocationId, associationId, instanceId, networkInterfaceId, domain
   FROM aws.ec2_native.addresses
   WHERE region = '${AWS_REGION}'
 filter: aws_unassociated_eip
 columns: [publicIp, region, estimated_monthly_usd]
+suggested_remediation:
+  type: delete
+  # Neither aws.ec2.addresses nor aws.ec2_native.addresses exposes a delete/release
+  # verb, so the executable fix is the aws CLI command.
+  tool: aws
+  command: aws ec2 release-address --allocation-id ${allocationId} --region ${region}
+  description: Release the unassociated Elastic IP via the aws CLI (stackql exposes no release verb).

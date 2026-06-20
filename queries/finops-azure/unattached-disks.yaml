@@ -7,8 +7,14 @@ description: |
 remediation: |
   Snapshot if needed, then DELETE FROM azure.compute.disks the orphaned disk.
 query: |
-  SELECT name, location, managedBy, properties
+  SELECT id, name, location, managedBy, properties
   FROM azure.compute.disks
   WHERE subscriptionId = '${SUBSCRIPTION_ID}'
 filter: azure_unattached_disk
 columns: [name, region, size_gb, estimated_monthly_usd]
+suggested_remediation:
+  type: delete
+  description: Delete the unattached managed disk (snapshot first if its data may be needed).
+  sql_query: |
+    DELETE FROM azure.compute.disks
+    WHERE subscriptionId = '${subscriptionId}' AND resourceGroupName = '${resourceGroupName}' AND diskName = '${name}'

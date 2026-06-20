@@ -7,8 +7,14 @@ description: |
 remediation: |
   Release with DELETE FROM google.compute.addresses if no longer needed.
 query: |
-  SELECT address, status, region, users
+  SELECT name, address, status, region, users
   FROM google.compute.addresses
   WHERE project = '${PROJECT_ID}'
 filter: gcp_unused_address
-columns: [address, region, estimated_monthly_usd]
+columns: [name, address, region, estimated_monthly_usd]
+suggested_remediation:
+  type: delete
+  description: Release the reserved static IP that is not in use.
+  sql_query: |
+    DELETE FROM google.compute.addresses
+    WHERE project = '${project}' AND region = '${region}' AND address = '${name}'

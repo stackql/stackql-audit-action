@@ -108,6 +108,66 @@ def load_checks(action_path: Path, dirname: str, provider_tag: str) -> list[dict
     return checks
 
 
+_REM_PLACEHOLDER = re.compile(r"\$\{([a-zA-Z0-9_.]+)\}")
+
+
+def _resolve_sql(template: str, ctx: dict) -> tuple[str | None, list[str]]:
+    """Substitute ${k}/${a.b} from ctx. Returns (resolved, missing). A correctly
+    authored template references only fields the detection query captures, so
+    `missing` is always empty; a non-empty `missing` is a template bug to fix."""
+    missing: list[str] = []
+
+    def sub(m: "re.Match") -> str:
+        cur = ctx
+        for part in m.group(1).split("."):
+            cur = cur.get(part) if isinstance(cur, dict) else None
+            if cur is None:
+                break
+        if cur is None or isinstance(cur, (dict, list)):
+            missing.append(m.group(1))
+            return ""
+        return str(cur)
+
+    out = _REM_PLACEHOLDER.sub(sub, template)
+    return (None if missing else out), missing
+
+
+def _suggested_remediation(check: dict, row: dict) -> dict | None:
+    """The reversal for one finding: {type, sql_query, description}. Uses the
+    check's structured `suggested_remediation` (stackql DML template resolved
+    against the row) when present; otherwise falls back to the prose remediation
+    as a manual suggestion — so every finding carries one. An unresolved template
+    is a bug (template references a field the check doesn't capture) and is logged
+    loudly rather than silently nulled."""
+    sr = check.get("suggested_remediation")
+    if isinstance(sr, dict):
+        ctx = {**row, "region": row.get("region"), "resource": row.get("resource")}
+
+        def _tmpl(field: str):
+            if not sr.get(field):
+                return None
+            out, missing = _resolve_sql(sr[field], ctx)
+            if missing:
+                print(f"::warning::suggested_remediation.{field} for {check.get('_file')} "
+                      f"references field(s) the check does not capture: {sorted(set(missing))} "
+                      f"— fix the template or the query")
+            return out
+
+        sql = _tmpl("sql_query")
+        command = _tmpl("command")
+        return {
+            "type": sr.get("type", "manual"),
+            "tool": sr.get("tool") or ("stackql" if sql else None),
+            "sql_query": sql,
+            "command": command,
+            "description": (sr.get("description") or check.get("remediation") or "").strip(),
+        }
+    if check.get("remediation"):
+        return {"type": "manual", "tool": None, "sql_query": None, "command": None,
+                "description": check["remediation"].strip()}
+    return None
+
+
 # --- shared report + scope-fanout core -------------------------------------
 
 def _budget_line(budget: Budget, stopped_reason: str | None, skipped: int) -> str:
@@ -197,6 +257,7 @@ def _finalize_report(title: str, header_lines: list[str], checks: list[dict],
                             "category": row.get("category"),
                             "kind": row.get("kind"),
                             "region": row.get("region"),
+                            "suggested_remediation": _suggested_remediation(c, row),
                             "fields": row,
                         }, default=str) + "\n")
         except OSError as e:

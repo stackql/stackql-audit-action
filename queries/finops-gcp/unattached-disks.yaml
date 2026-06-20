@@ -12,3 +12,10 @@ query: |
   WHERE project = '${PROJECT_ID}'
 filter: gcp_unattached_disk
 columns: [name, region, sizeGb, estimated_monthly_usd]
+suggested_remediation:
+  type: delete
+  # stackql exposes only a regional disk delete; zonal disks (the common case)
+  # have no zonal-delete method, so the executable fix is the gcloud command.
+  tool: gcloud
+  command: gcloud compute disks delete ${name} --zone ${zone_name} --project ${project} --quiet
+  description: Delete the unattached (zonal) disk via gcloud (stackql exposes no zonal disk delete).

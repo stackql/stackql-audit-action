@@ -492,7 +492,8 @@ def gcp_unattached_disk(rows: list[dict]) -> list[dict]:
         if _coerce_list(r.get("users")):
             continue
         region = _gcp_region(r)
-        out.append({**r, "region": region,
+        zone_name = (r.get("zone") or "").rsplit("/", 1)[-1]  # bare zone for gcloud --zone
+        out.append({**r, "region": region, "zone_name": zone_name,
                     "category": "waste", "estimated_monthly_usd": _monthly_cost("gcp", "block-storage", region, r.get("sizeGb"))})
     return out
 
@@ -509,6 +510,18 @@ def gcp_unused_address(rows: list[dict]) -> list[dict]:
     return out
 
 
+_AZURE_ID = re.compile(r"/subscriptions/([^/]+)/resourceGroups/([^/]+)/.*/([^/]+)$", re.IGNORECASE)
+
+
+def _azure_id_parts(resource_id: Any) -> dict:
+    """Pull the delete-identity (subscriptionId, resourceGroupName, name) out of an
+    ARM resource id, so the suggested_remediation template can address it."""
+    m = _AZURE_ID.match(resource_id or "")
+    if not m:
+        return {}
+    return {"subscriptionId": m.group(1), "resourceGroupName": m.group(2), "name": m.group(3)}
+
+
 def azure_unattached_disk(rows: list[dict]) -> list[dict]:
     """Managed disks not attached to anything (managedBy is null/empty)."""
     out: list[dict] = []
@@ -518,7 +531,7 @@ def azure_unattached_disk(rows: list[dict]) -> list[dict]:
         props = _coerce_dict(r.get("properties"))
         size = props.get("diskSizeGB")
         region = r.get("location")
-        out.append({**r, "region": region, "size_gb": size,
+        out.append({**r, **_azure_id_parts(r.get("id")), "region": region, "size_gb": size,
                     "category": "waste", "estimated_monthly_usd": _monthly_cost("azure", "block-storage", region, size)})
     return out
 
@@ -530,7 +543,7 @@ def azure_unassociated_public_ip(rows: list[dict]) -> list[dict]:
         if _coerce_dict(r.get("properties")).get("ipConfiguration"):
             continue
         region = r.get("location")
-        out.append({**r, "region": region,
+        out.append({**r, **_azure_id_parts(r.get("id")), "region": region,
                     "category": "waste", "estimated_monthly_usd": _monthly_cost("azure", "public-ip", region)})
     return out
 

@@ -12,6 +12,11 @@ query: |
   WHERE region = '${AWS_REGION}'
 filter: aws_unattached_volume
 columns: [volumeId, region, size, estimated_monthly_usd]
+suggested_remediation:
+  type: delete
+  description: Delete the unattached EBS volume (snapshot first if its data may be needed).
+  sql_query: |
+    DELETE FROM aws.ec2.volumes WHERE region = '${region}' AND data__Identifier = '${volumeId}'
 remediation_sql:
   # Re-verify the volume is still 'available' (read-only); pass = still orphaned.
   preflight: |
