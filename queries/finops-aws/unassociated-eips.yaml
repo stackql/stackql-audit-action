@@ -17,5 +17,6 @@ suggested_remediation:
   # Neither aws.ec2.addresses nor aws.ec2_native.addresses exposes a delete/release
   # verb, so the executable fix is the aws CLI command.
   tool: aws
+  preflight_query: aws ec2 describe-addresses --allocation-ids ${allocationId} --region ${region}
   command: aws ec2 release-address --allocation-id ${allocationId} --region ${region}
   description: Release the unassociated Elastic IP via the aws CLI (stackql exposes no release verb).

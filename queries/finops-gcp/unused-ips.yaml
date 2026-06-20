@@ -14,6 +14,8 @@ filter: gcp_unused_address
 columns: [name, address, region, estimated_monthly_usd]
 suggested_remediation:
   type: delete
+  preflight_query: |
+    SELECT name, status FROM google.compute.addresses WHERE project = '${project}' AND region = '${region}' AND address = '${name}'
   description: Release the reserved static IP that is not in use.
   sql_query: |
     DELETE FROM google.compute.addresses

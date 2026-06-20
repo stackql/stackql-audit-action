@@ -109,6 +109,20 @@ def load_checks(action_path: Path, dirname: str, provider_tag: str) -> list[dict
 
 
 _REM_PLACEHOLDER = re.compile(r"\$\{([a-zA-Z0-9_.]+)\}")
+# scope placeholder -> the per-row label the fanout tags the finding with
+_SCOPE_VARS = (("AWS_REGION", "region"), ("PROJECT_ID", "project"), ("SUBSCRIPTION_ID", "subscription"))
+
+
+def _executed_query(query: str | None, row: dict) -> str:
+    """The discovery query as actually run for this finding: scope placeholders
+    substituted from the row's scope label (so findings.json carries the real
+    query, not the ${AWS_REGION}-style template)."""
+    q = query or ""
+    for var, key in _SCOPE_VARS:
+        v = row.get(key)
+        if v is not None:
+            q = q.replace("${" + var + "}", str(v))
+    return q.strip()
 
 
 def _resolve_sql(template: str, ctx: dict) -> tuple[str | None, list[str]]:
@@ -155,15 +169,18 @@ def _suggested_remediation(check: dict, row: dict) -> dict | None:
 
         sql = _tmpl("sql_query")
         command = _tmpl("command")
+        preflight = _tmpl("preflight_query")
         return {
             "type": sr.get("type", "manual"),
             "tool": sr.get("tool") or ("stackql" if sql else None),
+            "preflight_query": preflight,
             "sql_query": sql,
             "command": command,
             "description": (sr.get("description") or check.get("remediation") or "").strip(),
         }
     if check.get("remediation"):
-        return {"type": "manual", "tool": None, "sql_query": None, "command": None,
+        return {"type": "manual", "tool": None, "preflight_query": None,
+                "sql_query": None, "command": None,
                 "description": check["remediation"].strip()}
     return None
 
@@ -252,7 +269,7 @@ def _finalize_report(title: str, header_lines: list[str], checks: list[dict],
                             "check_id": c.get("id"),
                             "check_file": c.get("_file"),
                             "check_name": c.get("name"),
-                            "query": (c.get("query") or "").strip(),
+                            "query": _executed_query(c.get("query"), row),
                             "severity": (c.get("severity") or "MEDIUM").upper(),
                             "category": row.get("category"),
                             "kind": row.get("kind"),

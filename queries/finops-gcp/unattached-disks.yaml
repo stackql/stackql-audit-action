@@ -17,5 +17,6 @@ suggested_remediation:
   # stackql exposes only a regional disk delete; zonal disks (the common case)
   # have no zonal-delete method, so the executable fix is the gcloud command.
   tool: gcloud
+  preflight_query: gcloud compute disks describe ${name} --zone ${zone_name} --project ${project}
   command: gcloud compute disks delete ${name} --zone ${zone_name} --project ${project} --quiet
   description: Delete the unattached (zonal) disk via gcloud (stackql exposes no zonal disk delete).

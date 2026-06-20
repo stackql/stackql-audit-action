@@ -14,6 +14,8 @@ filter: aws_unattached_volume
 columns: [volumeId, region, size, estimated_monthly_usd]
 suggested_remediation:
   type: delete
+  preflight_query: |
+    SELECT volumeId FROM aws.ec2_native.volumes WHERE region = '${region}' AND volumeId = '${volumeId}' AND status = 'available'
   description: Delete the unattached EBS volume (snapshot first if its data may be needed).
   sql_query: |
     DELETE FROM aws.ec2.volumes WHERE region = '${region}' AND data__Identifier = '${volumeId}'

@@ -14,6 +14,8 @@ filter: azure_unattached_disk
 columns: [name, region, size_gb, estimated_monthly_usd]
 suggested_remediation:
   type: delete
+  preflight_query: |
+    SELECT name, managedBy FROM azure.compute.disks WHERE subscriptionId = '${subscriptionId}' AND resourceGroupName = '${resourceGroupName}' AND diskName = '${name}'
   description: Delete the unattached managed disk (snapshot first if its data may be needed).
   sql_query: |
     DELETE FROM azure.compute.disks
