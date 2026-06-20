@@ -64,20 +64,62 @@ def _run_statement(stmt: str, auth: str, log_path: Path, retries: int):
     rows = err = None
     rc = 1
     for attempt in range(retries + 1):
+        print(f"::notice::running statement (attempt {attempt + 1}/{retries + 1}): {stmt}")
         rows, err, rc = audit.run_stackql(stmt, auth, log_path)
+        print(f"::notice::attempt {attempt + 1} result: exit {rc}, {json.dumps(rows, default=str)[:200]} rows, err={err or '(empty)'}")
         if err and audit._is_throttle(err) and attempt < retries:
             delay = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
             time.sleep(delay * (0.75 + 0.5 * ((attempt + 1) / (retries + 1))))
             continue
         break
     # Print inline (NOT in a ::group::, which GitHub collapses and hides).
+    try:
+        auth_keys = sorted(json.loads(auth).keys()) if auth else []
+    except Exception:
+        auth_keys = ["<unparseable>"]
     print("─── stackql statement ───────────────────────────────")
+    print(f"CMD   : stackql exec {'--auth <keys=' + ','.join(auth_keys) + '> ' if auth else ''}--output json <query>")
     print(f"QUERY : {stmt}")
     print(f"EXIT  : {rc}")
     print(f"STDOUT: {json.dumps(rows, default=str)[:4000] if rows is not None else '(none)'}")
     print(f"STDERR: {err or '(empty)'}")
     print("─────────────────────────────────────────────────────")
     return rows, err, rc
+
+
+_REGION_PRED = re.compile(r"region\s*=\s*'[^']*'", re.IGNORECASE)
+_WHERE_SPLIT = re.compile(r"\bWHERE\b", re.IGNORECASE)
+
+
+def _diagnose_zero_rows(stmt: str, auth: str, log_path: Path) -> None:
+    """A preflight SELECT returned 0 rows. Re-run a region-ONLY variant of the
+    same query (drop every client-side predicate, keep only the server-side
+    `region` param) and log the count. This isolates the cause: if the region-
+    only variant returns rows but the full query returned 0, the released
+    stackql build is dropping the client-side-filtered predicates (e.g.
+    volumeId/status) — NOT an auth/account/region problem."""
+    if not stmt.lstrip().upper().startswith("SELECT"):
+        return
+    parts = _WHERE_SPLIT.split(stmt, maxsplit=1)
+    if len(parts) != 2:
+        return  # no WHERE, nothing to isolate
+    region_m = _REGION_PRED.search(parts[1])
+    if not region_m:
+        return  # no region predicate to keep
+    probe = f"{parts[0].rstrip()} WHERE {region_m.group(0)}"
+    rows, err, rc = audit.run_stackql(probe, auth, log_path)
+    n = len(rows) if isinstance(rows, list) else 0
+    print("─── 0-row diagnostic: region-only re-run ─────────────")
+    print(f"PROBE : {probe}")
+    print(f"EXIT  : {rc}   ROWS: {n}   STDERR: {err or '(empty)'}")
+    if n > 0:
+        print("VERDICT: region-only returns rows but the full query returned 0 "
+              "→ the client-side predicates (e.g. volumeId/status) are being "
+              "dropped by this stackql build. Auth/account/region are FINE.")
+    else:
+        print("VERDICT: region-only ALSO returns 0 → the volume isn't visible in "
+              "this account/region (or auth differs), NOT a client-filter issue.")
+    print("─────────────────────────────────────────────────────")
 
 
 def _preflight_pass(file_obj: dict, expect_empty: bool) -> bool:
@@ -108,6 +150,8 @@ def run_preflight(files: list[Path], auth: str, retries: int, file_timeout: int,
             for stmt in split_statements(text):
                 rows, err, rc = _run_statement(stmt, auth, tmp / "stmt.log", retries)
                 obj["statements"].append({"statement": stmt, "rows": rows, "errors": err})
+                if rc == 0 and not err and not rows:
+                    _diagnose_zero_rows(stmt, auth, tmp / "probe.log")
                 if rc != 0 or err:
                     obj["exit_code"] = rc or 1
                     obj["errors"] = err

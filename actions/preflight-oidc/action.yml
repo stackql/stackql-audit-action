@@ -173,6 +173,11 @@ runs:
           auth+=('"entra_id":{"type":"bearer","credentialsenvvar":"AZURE_GRAPH_TOKEN"}')
         fi
         if [ "${#auth[@]}" -gt 0 ]; then IFS=','; export STACKQL_AUDIT_AUTH="{${auth[*]}}"; unset IFS; fi
+        if [ "$AWS_AUTH_OK" = "true" ]; then
+          echo "::notice::AWS caller identity (account this preflight runs as):"
+          aws sts get-caller-identity --output json 2>&1 || echo "::warning::sts get-caller-identity failed"
+          echo "::notice::AWS region (env): ${AWS_REGION:-unset}"
+        fi
         python3 -m pip install --quiet -r "${ACTION_PATH}/cicd/requirements.txt"
         python3 "${ACTION_PATH}/scripts/run_sql_files.py"; code=$?
         cat "${RUNNER_TEMP}/preflight-summary.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
