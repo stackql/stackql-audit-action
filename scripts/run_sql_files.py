@@ -59,15 +59,24 @@ def split_statements(text: str) -> list[str]:
 
 
 def _run_statement(stmt: str, auth: str, log_path: Path, retries: int):
-    """run_stackql one statement with throttle retry. Returns (rows, err, rc)."""
+    """run_stackql one statement with throttle retry. Returns (rows, err, rc).
+    Prints the query + stdout(rows) + stderr to the job log every run."""
+    rows = err = None
+    rc = 1
     for attempt in range(retries + 1):
         rows, err, rc = audit.run_stackql(stmt, auth, log_path)
         if err and audit._is_throttle(err) and attempt < retries:
             delay = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
             time.sleep(delay * (0.75 + 0.5 * ((attempt + 1) / (retries + 1))))
             continue
-        return rows, err, rc
-    return None, "exhausted retries (throttled)", 1
+        break
+    print("::group::stackql statement")
+    print(f"-- query --\n{stmt}")
+    print(f"-- exit -- {rc}")
+    print(f"-- stdout (rows) --\n{json.dumps(rows, default=str)[:4000] if rows is not None else '(none)'}")
+    print(f"-- stderr --\n{err or '(empty)'}")
+    print("::endgroup::")
+    return rows, err, rc
 
 
 def _preflight_pass(file_obj: dict, expect_empty: bool) -> bool:
