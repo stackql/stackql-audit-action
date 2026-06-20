@@ -201,6 +201,25 @@ def _disarm_timeout() -> None:
         pass
 
 
+def _log_result(obj: dict, ok: bool, expect_empty: bool = False) -> None:
+    """Per-file line to the job log — so a failure is visible, not buried in JSON."""
+    rows = sum(len(s.get("rows") or []) for s in obj["statements"])
+    lvl = "notice" if ok else "warning"
+    msg = (f"::{lvl}::{obj['mode']} {'PASS' if ok else 'FAIL'}: {obj['file']} "
+           f"— exit {obj['exit_code']}, {len(obj['statements'])} stmt, {rows} row(s)")
+    if "statements_executed" in obj:
+        msg += f", {obj['statements_executed']} executed"
+    print(msg)
+    if not ok and obj["mode"] == "preflight" and obj["exit_code"] == 0:
+        print(f"::warning::  preflight criterion not met: expected "
+              f"{'0' if expect_empty else '>=1'} row(s), got {rows}")
+    if obj.get("errors"):
+        print(f"::error::  {str(obj['errors']).splitlines()[0]}")
+    for s in obj["statements"]:
+        if s.get("errors"):
+            print(f"::error::  statement failed: {str(s['errors']).splitlines()[0]}")
+
+
 def _summary_md(mode: str, results: list[dict], passed: bool, mutations: int) -> str:
     lines = [f"# StackQL {mode} — {'PASS' if passed else 'FAIL'}", ""]
     if mode == "apply":
@@ -223,12 +242,35 @@ def main() -> int:
     if not pattern:
         print("::error::glob is required")
         return 2
-    files = sorted(Path(p) for p in globmod.glob(str(workdir / pattern), recursive=True)
+    resolved = str(workdir / pattern)
+    print(f"::notice::{mode}: workdir={workdir} exists={workdir.is_dir()}  glob={pattern}  -> {resolved}")
+    files = sorted(Path(p) for p in globmod.glob(resolved, recursive=True)
                    if p.endswith(".sql") and Path(p).is_file())
     if not files:
-        print(f"::warning::no .sql files matched: {pattern}")
+        print(f"::error::no .sql files matched '{pattern}' under {workdir} "
+              f"— check working-directory/glob (this is why preflight does nothing)")
+        cwd = Path(os.getcwd())
+        print(f"::group::path debug (cwd={cwd}, workdir={workdir})")
+        print(f"-- entries in cwd ({cwd}):")
+        for p in sorted(cwd.iterdir())[:40]:
+            print(f"   {'d' if p.is_dir() else 'f'} {p.name}")
+        print(f"-- entries in workdir ({workdir}):")
+        if workdir.is_dir():
+            for p in sorted(workdir.iterdir())[:40]:
+                print(f"   {'d' if p.is_dir() else 'f'} {p.name}")
+        else:
+            print("   (workdir does not exist)")
+        print("-- every *.sql under workdir (recursive, first 40):")
+        for p in sorted(workdir.rglob("*.sql"))[:40]:
+            print(f"   {p}")
+        print("::endgroup::")
+        return 2
+    print(f"::notice::{mode}: matched {len(files)} file(s):")
+    for p in files:
+        print(f"::notice::  - {p}")
 
-    auth, _ = audit.build_auth()
+    auth, payload_keys = audit.build_auth()
+    print(f"::notice::{mode}: stackql auth providers = {sorted(payload_keys) or '(stackql env defaults)'}")
     mutations = 0
     if mode == "preflight":
         results, passed = run_preflight(
@@ -251,10 +293,17 @@ def main() -> int:
         print(f"::error::unknown mode '{mode}'")
         return 2
 
+    # Per-file outcome to the log so failures are visible (not just in JSON).
+    expect_empty = _bool("RUN_SQL_EXPECT_EMPTY", False)
+    for obj in results:
+        ok = _preflight_pass(obj, expect_empty) if mode == "preflight" else obj["exit_code"] == 0
+        _log_result(obj, ok, expect_empty)
+
     results_path = tmp / f"{mode}-results.json"
     summary_path = tmp / f"{mode}-summary.md"
     results_path.write_text(json.dumps(results, indent=2))
     summary_path.write_text(_summary_md(mode, results, passed, mutations))
+    print(_summary_md(mode, results, passed, mutations))  # also to stdout
 
     gh_out = os.environ.get("GITHUB_OUTPUT")
     if gh_out:
