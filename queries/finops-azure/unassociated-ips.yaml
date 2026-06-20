@@ -13,6 +13,7 @@ filter: azure_unassociated_public_ip
 columns: [name, region, estimated_monthly_usd]
 suggested_remediation:
   type: delete
+  tool: stackql
   preflight_query: |
     SELECT name FROM azure.network.public_ip_addresses WHERE subscriptionId = '${subscriptionId}' AND resourceGroupName = '${resourceGroupName}' AND publicIpAddressName = '${name}'
   description: Release the unassociated public IP address.

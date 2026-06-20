@@ -14,9 +14,9 @@ filter: aws_unassociated_eip
 columns: [publicIp, region, estimated_monthly_usd]
 suggested_remediation:
   type: delete
-  # Neither aws.ec2.addresses nor aws.ec2_native.addresses exposes a delete/release
-  # verb, so the executable fix is the aws CLI command.
-  tool: aws
-  preflight_query: aws ec2 describe-addresses --allocation-ids ${allocationId} --region ${region}
-  command: aws ec2 release-address --allocation-id ${allocationId} --region ${region}
-  description: Release the unassociated Elastic IP via the aws CLI (stackql exposes no release verb).
+  tool: stackql
+  preflight_query: |
+    SELECT publicIp, associationId FROM aws.ec2_native.addresses WHERE region = '${region}' AND allocationId = '${allocationId}'
+  sql_query: |
+    DELETE FROM aws.ec2.address WHERE region = '${region}' AND AllocationId = '${allocationId}'
+  description: Release the unassociated Elastic IP (ReleaseAddress).

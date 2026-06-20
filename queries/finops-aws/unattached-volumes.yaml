@@ -5,7 +5,7 @@ description: |
   EBS volumes in the 'available' state (not attached to any instance). Billed
   per GB-month while idle. Estimated monthly cost from the pricing snapshot.
 remediation: |
-  Snapshot if needed, then DELETE FROM aws.ec2_native.volumes the orphaned volume.
+  Snapshot if needed, then DELETE the unattached volume.
 query: |
   SELECT volumeId, size, status, AvailabilityZone, volumeType, createTime
   FROM aws.ec2_native.volumes
@@ -14,17 +14,9 @@ filter: aws_unattached_volume
 columns: [volumeId, region, size, estimated_monthly_usd]
 suggested_remediation:
   type: delete
+  tool: stackql
   preflight_query: |
     SELECT volumeId FROM aws.ec2_native.volumes WHERE region = '${region}' AND volumeId = '${volumeId}' AND status = 'available'
-  description: Delete the unattached EBS volume (snapshot first if its data may be needed).
   sql_query: |
-    DELETE FROM aws.ec2.volumes WHERE region = '${region}' AND data__Identifier = '${volumeId}'
-remediation_sql:
-  # Re-verify the volume is still 'available' (read-only); pass = still orphaned.
-  preflight: |
-    SELECT volumeId, status FROM aws.ec2_native.volumes
-    WHERE region = '${region}' AND volumeId = '${volumeId}'
-  # Delete the orphaned volume via Cloud Control (DeleteVolume).
-  apply: |
-    DELETE FROM aws.ec2.volumes
-    WHERE region = '${region}' AND data__Identifier = '${volumeId}'
+    DELETE FROM aws.ec2.volumes WHERE region = '${region}' AND VolumeId = '${volumeId}'
+  description: Delete the unattached EBS volume (snapshot first if its data may be needed).
