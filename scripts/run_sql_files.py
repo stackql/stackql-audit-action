@@ -70,12 +70,13 @@ def _run_statement(stmt: str, auth: str, log_path: Path, retries: int):
             time.sleep(delay * (0.75 + 0.5 * ((attempt + 1) / (retries + 1))))
             continue
         break
-    print("::group::stackql statement")
-    print(f"-- query --\n{stmt}")
-    print(f"-- exit -- {rc}")
-    print(f"-- stdout (rows) --\n{json.dumps(rows, default=str)[:4000] if rows is not None else '(none)'}")
-    print(f"-- stderr --\n{err or '(empty)'}")
-    print("::endgroup::")
+    # Print inline (NOT in a ::group::, which GitHub collapses and hides).
+    print("─── stackql statement ───────────────────────────────")
+    print(f"QUERY : {stmt}")
+    print(f"EXIT  : {rc}")
+    print(f"STDOUT: {json.dumps(rows, default=str)[:4000] if rows is not None else '(none)'}")
+    print(f"STDERR: {err or '(empty)'}")
+    print("─────────────────────────────────────────────────────")
     return rows, err, rc
 
 
