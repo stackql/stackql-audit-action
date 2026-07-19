@@ -1,0 +1,16 @@
+id: gcp-default-network
+name: Default VPC network exists
+severity: MEDIUM
+description: |
+  The auto-created 'default' network ships with overly permissive firewall
+  rules (e.g. default-allow-internal, default-allow-ssh). Production projects
+  should use a purpose-built VPC.
+remediation: |
+  Delete the default network and create a purpose-built VPC with explicit
+  firewall rules.
+query: |
+  SELECT name, autoCreateSubnetworks, routingConfig
+  FROM google.compute.networks
+  WHERE project = '${PROJECT_ID}'
+    AND name = 'default'
+columns: [name, autoCreateSubnetworks]

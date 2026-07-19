@@ -1,0 +1,19 @@
+id: gcp-firewall-ssh-open
+name: SSH (22/tcp) open to the internet
+severity: HIGH
+description: |
+  Ingress firewall rules that allow tcp/22 from 0.0.0.0/0. Public SSH is a
+  primary vector for brute-force credential attacks.
+remediation: |
+  Restrict sourceRanges to known IPs, or replace with IAP TCP forwarding.
+query: |
+  SELECT name, network, direction, priority, sourceRanges, allowed
+  FROM google.compute.firewalls
+  WHERE project = '${PROJECT_ID}'
+    AND direction = 'INGRESS'
+    AND disabled = false
+filter: firewall_allows_port
+filter_args:
+  port: 22
+  protocol: tcp
+columns: [name, network, priority]

@@ -1,0 +1,14 @@
+id: aws-finops-unattached-volume
+name: Unattached EBS volumes
+severity: LOW
+description: |
+  EBS volumes in the 'available' state (not attached to any instance). Billed
+  per GB-month while idle. Estimated monthly cost from the pricing snapshot.
+remediation: |
+  Snapshot if needed, then DELETE FROM aws.ec2_native.volumes the orphaned volume.
+query: |
+  SELECT volumeId, size, status, AvailabilityZone, volumeType, createTime
+  FROM aws.ec2_native.volumes
+  WHERE region = '${AWS_REGION}'
+filter: aws_unattached_volume
+columns: [volumeId, region, size, estimated_monthly_usd]

@@ -1,0 +1,16 @@
+id: gcp-compute-default-sa
+name: Compute instances using the default service account
+severity: MEDIUM
+description: |
+  VMs running as the default compute service account (PROJECT_NUMBER-compute@...)
+  inherit Project Editor by default. Use least-privilege custom SAs per workload.
+remediation: |
+  Create a custom service account with only the permissions the workload needs,
+  then update the instance to use it.
+query: |
+  SELECT name, zone, status, serviceAccounts
+  FROM google.compute.instances
+  WHERE project = '${PROJECT_ID}'
+    AND status = 'RUNNING'
+filter: instance_uses_default_sa
+columns: [name, zone]

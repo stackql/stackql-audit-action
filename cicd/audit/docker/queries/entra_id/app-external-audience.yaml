@@ -1,0 +1,16 @@
+id: entra-app-external-audience
+name: App registrations open to external accounts
+severity: MEDIUM
+description: |
+  App registrations whose signInAudience extends beyond the home tenant
+  (multi-tenant, or personal Microsoft accounts). These can be consented to by
+  identities outside the organization and should be deliberate, not accidental.
+remediation: |
+  If the app is only used in-house, set signInAudience to AzureADMyOrg via
+  entra_id.applications.applications update. Otherwise confirm the broad audience
+  is intended and that admin consent / publisher verification are in place.
+query: |
+  SELECT appId, displayName, signInAudience
+  FROM entra_id.applications.applications
+filter: entra_external_audience
+columns: [displayName, appId, signInAudience]

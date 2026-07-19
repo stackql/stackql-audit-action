@@ -1,0 +1,17 @@
+id: aws-sg-rdp-open
+name: RDP (3389/tcp) open to the internet
+severity: HIGH
+description: |
+  Security-group ingress rules allowing tcp/3389 from 0.0.0.0/0. Public RDP is a
+  primary vector for brute-force and ransomware entry.
+remediation: |
+  Restrict the rule's source ranges to known CIDRs, or front instances with SSM Session Manager.
+query: |
+  SELECT group_id, group_name, vpc_id, ip_permissions
+  FROM aws.ec2.security_groups
+  WHERE region = '${AWS_REGION}'
+filter: sg_allows_port
+filter_args:
+  port: 3389
+  protocol: tcp
+columns: [group_id, group_name, vpc_id]

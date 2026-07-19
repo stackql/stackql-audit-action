@@ -1,0 +1,17 @@
+id: azure-nsg-ssh-open
+name: SSH (22/tcp) open to the internet
+severity: HIGH
+description: |
+  Network security groups with an inbound Allow rule for tcp/22 from any source
+  (*, Internet, or 0.0.0.0/0). Public SSH invites brute-force attacks.
+remediation: |
+  Scope sourceAddressPrefix to known ranges, or use Azure Bastion.
+query: |
+  SELECT id, name, properties
+  FROM azure.network.security_groups
+  WHERE subscriptionId = '${SUBSCRIPTION_ID}'
+filter: nsg_allows_port
+filter_args:
+  port: 22
+  protocol: tcp
+columns: [name, id]

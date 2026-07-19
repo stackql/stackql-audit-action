@@ -1,0 +1,15 @@
+id: azure-finops-advisor-cost
+name: Azure Advisor cost recommendations
+severity: LOW
+description: |
+  Cost recommendations Azure Advisor has already computed (right-size or shut down
+  underutilized VMs, etc.). Vendor-verdict — surfaced as `suspected` with Advisor's
+  own savings estimate. No metrics scanning on our side.
+remediation: |
+  Apply the recommendation's solution (resize/deallocate) for the impacted resource.
+query: |
+  SELECT id, properties
+  FROM azure.advisor.recommendations
+  WHERE subscriptionId = '${SUBSCRIPTION_ID}'
+filter: azure_advisor_cost
+columns: [resource, impact, recommendation, estimated_savings_usd]

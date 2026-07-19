@@ -1,0 +1,11 @@
+id: aws-finops-db-watch
+name: RDS instances (watch)
+severity: LOW
+description: Managed RDS instances flagged for cost review (category=watch). Run-rate populated once db pricing lands.
+remediation: Review instance class / engine for right-sizing; confirm justified.
+query: |
+  SELECT db_instance_identifier, db_instance_class, engine, region
+  FROM aws.rds.db_instances
+  WHERE region = '${AWS_REGION}'
+filter: aws_rds_watch
+columns: [resource, type, engine, region, monthly_run_rate_usd]

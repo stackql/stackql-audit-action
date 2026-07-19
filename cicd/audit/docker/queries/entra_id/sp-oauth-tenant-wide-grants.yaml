@@ -1,0 +1,18 @@
+id: entra-sp-oauth-tenant-wide-grants
+name: Tenant-wide OAuth grants to sensitive scopes
+severity: HIGH
+description: |
+  OAuth2 delegated permission grants consented for ALL users in the tenant
+  (consentType = AllPrincipals) that include high-privilege Microsoft Graph
+  scopes (directory write, mail, files, role management, etc.). A single
+  tenant-wide grant lets the client app act for every user against that scope.
+remediation: |
+  Revoke the over-broad grant with DELETE FROM
+  entra_id.oauth2_permission_grants.oauth2_permission_grants, then re-consent
+  narrowly (per-user, or a reduced scope set). Restrict who can consent via the
+  tenant authorization and permission-grant policies.
+query: |
+  SELECT id, clientId, resourceId, consentType, scope
+  FROM entra_id.oauth2_permission_grants.oauth2_permission_grants
+filter: entra_oauth_tenant_wide_grants
+columns: [clientId, resourceId, sensitive_scopes, consentType]

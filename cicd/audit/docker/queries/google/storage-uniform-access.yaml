@@ -1,0 +1,15 @@
+id: gcp-storage-uniform-bucket-level-access
+name: Storage buckets without uniform bucket-level access
+severity: MEDIUM
+description: |
+  Buckets with object-level ACLs make IAM hard to reason about. Uniform
+  bucket-level access enforces IAM-only permissions and prevents ACL drift.
+remediation: |
+  Enable uniform bucket-level access on the bucket so permissions are managed
+  by IAM only (no object-level ACLs).
+query: |
+  SELECT name, location, storageClass, iamConfiguration
+  FROM google.storage.buckets
+  WHERE project = '${PROJECT_ID}'
+filter: bucket_no_uniform_access
+columns: [name, location, storageClass]

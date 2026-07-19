@@ -1,0 +1,15 @@
+id: gcp-compute-public-ip
+name: Compute instances with public IPs
+severity: MEDIUM
+description: |
+  VM instances exposing an external IP. Prefer private VMs accessed via IAP.
+remediation: |
+  Remove the external IP from the instance's network interface, or migrate
+  management access to IAP.
+query: |
+  SELECT name, zone, status, networkInterfaces
+  FROM google.compute.instances
+  WHERE project = '${PROJECT_ID}'
+    AND status = 'RUNNING'
+filter: instance_has_external_ip
+columns: [name, zone, status]

@@ -1,0 +1,10 @@
+id: aws-s3-versioning-disabled
+name: S3 bucket versioning not enabled
+severity: MEDIUM
+description: |
+  Without versioning, overwritten or deleted objects cannot be recovered,
+  weakening protection against accidental loss and ransomware.
+remediation: |
+  Enable versioning on the bucket.
+filter: s3_versioning_disabled
+columns: [bucket_name, region]
