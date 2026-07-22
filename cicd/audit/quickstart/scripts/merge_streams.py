@@ -53,7 +53,7 @@ def _read_jsonl(path: Path) -> list:
         try:
             out.append(json.loads(line))
         except json.JSONDecodeError:
-            print(f"::warning::skipping malformed line in {path.name}")
+            print(f"warning: skipping malformed line in {path.name}")
     return out
 
 
@@ -157,9 +157,9 @@ def _prepend_rollup(streams_dir: Path, merged: dict) -> None:
         if existing.lstrip().startswith("# Cloud Audit —"):
             return  # already prepended (e.g. a merge re-run) — don't stack roll-ups
         report.write_text(_rollup_md(streams_dir, merged) + "\n\n---\n\n" + existing)
-        print(f"::notice::prepended executive roll-up to {report}")
+        print(f"prepended executive roll-up to {report}")
     except OSError as e:
-        print(f"::warning::could not write roll-up to report.md: {e}")
+        print(f"warning: could not write roll-up to report.md: {e}")
 
 
 def main() -> int:
@@ -169,7 +169,7 @@ def main() -> int:
         or "."
     )
     if not streams_dir.is_dir():
-        print(f"::warning::streams dir not found: {streams_dir}; nothing to merge")
+        print(f"warning: streams dir not found: {streams_dir}; nothing to merge")
         return 0
 
     merged = merge(streams_dir)
@@ -177,9 +177,9 @@ def main() -> int:
     out = streams_dir / "summary.json"
     try:
         out.write_text(json.dumps(merged, default=str, indent=2))
-        print(f"::notice::wrote {out} ({len(merged)} stream(s), {total} record(s))")
+        print(f"wrote {out} ({len(merged)} stream(s), {total} record(s))")
     except OSError as e:
-        print(f"::warning::could not write summary.json: {e}")
+        print(f"warning: could not write summary.json: {e}")
 
     # findings.json — flat, fully-traceable result rows (every row + its
     # originating check/query + full fields) for downstream/agent consumption.
@@ -191,16 +191,16 @@ def main() -> int:
     findings_out = streams_dir / "findings.json"
     try:
         findings_out.write_text(json.dumps({"findings": rows}, default=str, indent=2))
-        print(f"::notice::wrote {findings_out} ({len(rows)} traceable row(s))")
+        print(f"wrote {findings_out} ({len(rows)} traceable row(s))")
     except OSError as e:
-        print(f"::warning::could not write findings.json: {e}")
+        print(f"warning: could not write findings.json: {e}")
 
     # Executive cross-cloud roll-up, prepended to report.md. Best-effort: a
     # roll-up failure must never fail the audit, so swallow anything unexpected.
     try:
         _prepend_rollup(streams_dir, merged)
     except Exception as e:  # noqa: BLE001 — merge is documented as never-fatal
-        print(f"::warning::roll-up skipped: {e}")
+        print(f"warning: roll-up skipped: {e}")
     return 0
 
 

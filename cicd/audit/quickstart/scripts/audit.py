@@ -61,16 +61,16 @@ def build_auth() -> tuple[str, set[str]]:
             with open(os.environ["STACKQL_AUDIT_AUTH_FILE"]) as f:
                 override = f.read()
         except OSError as e:
-            print(f"::error::STACKQL_AUDIT_AUTH_FILE could not be read: {e}")
+            print(f"error: STACKQL_AUDIT_AUTH_FILE could not be read: {e}")
             return "", set()
     if override:
         try:
             parsed = json.loads(override)
         except json.JSONDecodeError as e:
-            print(f"::error::STACKQL_AUDIT_AUTH is not valid JSON: {e}")
+            print(f"error: STACKQL_AUDIT_AUTH is not valid JSON: {e}")
             return "", set()
         if not isinstance(parsed, dict):
-            print("::error::STACKQL_AUDIT_AUTH must be a JSON object keyed by provider")
+            print("error: STACKQL_AUDIT_AUTH must be a JSON object keyed by provider")
             return "", set()
         return json.dumps(parsed), set(parsed.keys())
     return "", set()
@@ -236,6 +236,12 @@ def render_pass(check: dict, scanned: int | None = None) -> str:
     prov = check.get("_provider", "").upper()
     name = check["name"]
     desc = (check.get("description") or "").strip()
+    if scanned == 0:
+        # Scanned nothing: an empty resource set or (often) no read visibility.
+        # Flag it instead of a green pass so a permission failure can't hide as
+        # "no findings".
+        return (f"### ⚠️ `{prov}` {name}  ·  scanned 0\n_{desc}_\n\n"
+                "Nothing scanned — no resources of this type, or no visibility/permission.\n")
     head = f"### ✅ `{prov}` {name}"
     if scanned is not None:
         head += f"  ·  {scanned:,} scanned"
@@ -262,7 +268,7 @@ def main() -> int:
     qp = os.environ.get("QUERIES_PATH", "").strip()
     queries_root = Path(qp) if qp else action_path / "queries"
     if not queries_root.is_dir():
-        print(f"::error::queries path not found: {queries_root}")
+        print(f"error: queries path not found: {queries_root}")
         return 2
 
     filters_mod = load_filters_module(action_path)
@@ -288,7 +294,7 @@ def main() -> int:
     for pdir in sorted(p for p in queries_root.iterdir() if p.is_dir()):
         provider = pdir.name
         if not provider_allowed(provider):
-            print(f"::notice::skipping {provider}: not in STACKQL_AUDIT_PROVIDERS")
+            print(f"skipping {provider}: not in STACKQL_AUDIT_PROVIDERS")
             continue
         for cf in sorted(list(pdir.glob("*.yaml")) + list(pdir.glob("*.yml"))):
             with cf.open() as f:
@@ -296,12 +302,12 @@ def main() -> int:
             check["_file"] = f"{provider}/{cf.name}"
             check["_provider"] = provider
             if check_skipped(check):
-                print(f"::notice::skipping {check['_file']}: matched STACKQL_AUDIT_SKIP")
+                print(f"skipping {check['_file']}: matched STACKQL_AUDIT_SKIP")
                 continue
             checks.append(check)
 
     if not checks:
-        print(f"::warning::no checks found in {queries_root}")
+        print(f"warning: no checks found in {queries_root}")
         return 0
 
     results: dict[str, dict] = {}
@@ -336,8 +342,8 @@ def main() -> int:
     except OSError:
         pass
     for file_key, code in nonzero:
-        print(f"::warning::stackql non-zero exit ({code}) for {file_key}")
-    print(f"::notice::stackql logs in {log_dir}")
+        print(f"warning: stackql non-zero exit ({code}) for {file_key}")
+    print(f"stackql logs in {log_dir}")
 
     findings_by_severity = {k: 0 for k in SEVERITY_ORDER}
     total_findings = 0
@@ -352,7 +358,7 @@ def main() -> int:
         if r["status"] == "error":
             error_count += 1
             sections.append(render_error(check, r["error"]))
-            print(f"::warning::{check['name']}: {r['error'].splitlines()[0]}")
+            print(f"warning: {check['name']}: {r['error'].splitlines()[0]}")
             continue
         if r["status"] == "pass":
             sections.append(render_pass(check, r.get("scanned")))
@@ -381,7 +387,7 @@ def main() -> int:
                 for rec in recs:
                     sf.write(json.dumps(rec, default=str) + "\n")
         except OSError as e:
-            print(f"::warning::could not write {prov} stream: {e}")
+            print(f"warning: could not write {prov} stream: {e}")
 
     out_lines: list[str] = []
     out_lines.append("# StackQL Cloud Audit")
@@ -418,7 +424,7 @@ def main() -> int:
         and SEVERITY_ORDER[highest_severity] >= fail_threshold
     )
     if should_fail:
-        print(f"\n::error::Audit found {highest_severity} findings (fail-on-severity={fail_on})")
+        print(f"\nerror: Audit found {highest_severity} findings (fail-on-severity={fail_on})")
         return 1
     return 0
 

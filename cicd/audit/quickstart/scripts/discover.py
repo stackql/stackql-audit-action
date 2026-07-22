@@ -105,7 +105,7 @@ def load_checks(action_path: Path, dirname: str, provider_tag: str) -> list[dict
         c["_file"] = f"{dirname}/{cf.name}"
         c["_provider"] = provider_tag
         if audit.check_skipped(c):
-            print(f"::notice::skipping {c['_file']}: matched STACKQL_AUDIT_SKIP")
+            print(f"skipping {c['_file']}: matched STACKQL_AUDIT_SKIP")
             # Record it so the merge roll-up can name what was skipped, rather than
             # the check silently vanishing from the report.
             try:
@@ -194,7 +194,7 @@ def _finalize_report(title: str, header_lines: list[str], checks: list[dict],
                         "status": "findings" if n else "clean",
                     }) + "\n")
         except OSError as e:
-            print(f"::warning::could not write assayed tally for {target}: {e}")
+            print(f"warning: could not write assayed tally for {target}: {e}")
 
         # Rich, fully-traceable rows for downstream/recommendation agents: every
         # result row + the check/query that produced it + the full field set,
@@ -219,7 +219,7 @@ def _finalize_report(title: str, header_lines: list[str], checks: list[dict],
                             "fields": row,
                         }, default=str) + "\n")
         except OSError as e:
-            print(f"::warning::could not write rows for {target}: {e}")
+            print(f"warning: could not write rows for {target}: {e}")
 
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
@@ -231,9 +231,9 @@ def _finalize_report(title: str, header_lines: list[str], checks: list[dict],
             f.write(f"findings-count={total}\n")
             f.write(f"highest-severity={highest}\n")
 
-    print(f"::notice::stackql logs in {log_dir}")
+    print(f"stackql logs in {log_dir}")
     if total > 0 and fail_threshold > 0 and audit.SEVERITY_ORDER[highest] >= fail_threshold:
-        print(f"::error::deep audit found {highest} findings (fail-on-severity={fail_on})")
+        print(f"error: deep audit found {highest} findings (fail-on-severity={fail_on})")
         return 1
     return 0
 
@@ -268,7 +268,7 @@ def audit_scope(label: str, scope_var: str, scope_value: str, checks: list[dict]
             try:
                 rows = audit.apply_filter(filters_mod, c["filter"], rows or [], c.get("filter_args"))
             except Exception as e:
-                print(f"::warning::filter {c['filter']} errored on {scope_value}: {e}")
+                print(f"warning: filter {c['filter']} errored on {scope_value}: {e}")
                 continue
         if rows:
             for r in rows:
@@ -284,7 +284,7 @@ def _scope_fanout(label: str, scope_var: str, scope_values: list[str], descent_s
     skipped, audited, scanned) — scanned is {check_file: total population scanned across
     all scopes} for filter checks (None for WHERE-clause checks, which have no denominator)."""
     stream_path = Path(os.environ.get("STACKQL_AUDIT_STREAM") or (_setup_stream_dir() / stream_name))
-    print(f"::notice::streaming findings to {stream_path}")
+    print(f"streaming findings to {stream_path}")
     findings: dict[str, list[dict]] = {c["_file"]: [] for c in checks}
     scanned_totals: dict[str, int | None] = {c["_file"]: (0 if c.get("filter") else None) for c in checks}
     skipped = 0
@@ -301,7 +301,7 @@ def _scope_fanout(label: str, scope_var: str, scope_values: list[str], descent_s
                 skipped += 1
                 if stopped_reason is None:
                     stopped_reason = budget.should_stop()
-                    print(f"::warning::deep audit stopping early — {stopped_reason}; analyzing partial results")
+                    print(f"warning: deep audit stopping early — {stopped_reason}; analyzing partial results")
                 continue
             out_map, errors, scanned_map = res
             audited += 1
@@ -339,7 +339,7 @@ def list_bucket_names(region: str, auth: str, log_dir: Path, budget: Budget) -> 
     budget.add_query()
     rows, err, _ = audit.run_stackql(q, auth, log_dir / "s3__list.log")
     if err:
-        print(f"::error::S3 bucket listing failed: {err.splitlines()[0]}")
+        print(f"error: S3 bucket listing failed: {err.splitlines()[0]}")
         return []
     return [r["bucket_name"] for r in (rows or []) if r.get("bucket_name")]
 
@@ -373,11 +373,11 @@ def fetch_bucket_detail(bucket: str, region: str, auth: str, log_dir: Path, budg
 
 def run_s3() -> int:
     if not audit.provider_allowed("aws"):
-        print("::notice::skipping s3: aws not in STACKQL_AUDIT_PROVIDERS")
+        print("skipping s3: aws not in STACKQL_AUDIT_PROVIDERS")
         return 0
     region = os.environ.get("AWS_REGION", "").strip()
     if not region:
-        print("::error::AWS_REGION is required for the S3 audit")
+        print("error: AWS_REGION is required for the S3 audit")
         return 2
     parallel = max(1, int(os.environ.get("STACKQL_S3_PARALLEL", "8")))
     fail_on = os.environ.get("FAIL_ON_SEVERITY", "HIGH").upper()
@@ -390,17 +390,17 @@ def run_s3() -> int:
     log_dir = _setup_log_dir()
     checks = load_checks(action_path, "s3", "aws")
     if not checks:
-        print("::warning::no S3 checks found in queries/s3/")
+        print("warning: no S3 checks found in queries/s3/")
         return 0
 
     budget = Budget.from_env(os.environ)
-    print(f"::notice::deep audit budget: {budget.describe_limits()}")
+    print(f"deep audit budget: {budget.describe_limits()}")
 
     buckets = list_bucket_names(region, auth, log_dir, budget)
-    print(f"::notice::S3: {len(buckets)} bucket(s); fetching detail with {parallel} worker(s)")
+    print(f"S3: {len(buckets)} bucket(s); fetching detail with {parallel} worker(s)")
 
     stream_path = Path(os.environ.get("STACKQL_AUDIT_STREAM") or (_setup_stream_dir() / "s3-findings.jsonl"))
-    print(f"::notice::streaming findings to {stream_path}")
+    print(f"streaming findings to {stream_path}")
 
     findings: dict[str, list[dict]] = {c["_file"]: [] for c in checks}
     fetch_errors: list[tuple[str, str]] = []
@@ -419,12 +419,12 @@ def run_s3() -> int:
                 skipped += 1
                 if stopped_reason is None:
                     stopped_reason = stop_reason
-                    print(f"::warning::deep audit stopping early — {stop_reason}; analyzing partial results")
+                    print(f"warning: deep audit stopping early — {stop_reason}; analyzing partial results")
                 continue
             if err:
                 fetch_errors.append((bucket, err))
                 first = err.splitlines()[0] if err else ""
-                print(f"::warning::S3 detail failed for {bucket}: {first}")
+                print(f"warning: S3 detail failed for {bucket}: {first}")
                 # Surface the unresolved bucket as one UNKNOWN finding rather than
                 # dropping it silently — one per bucket, not per check.
                 stream.write(json.dumps({
@@ -443,7 +443,7 @@ def run_s3() -> int:
                 try:
                     hits = audit.apply_filter(filters_mod, c["filter"], [detail], c.get("filter_args"))
                 except Exception as e:
-                    print(f"::warning::filter {c['filter']} errored on {bucket}: {e}")
+                    print(f"warning: filter {c['filter']} errored on {bucket}: {e}")
                     continue
                 if not hits:
                     continue
@@ -478,7 +478,7 @@ def enumerate_regions(seed_region: str, auth: str, log_dir: Path, budget: Budget
          f"WHERE region = '{seed_region}';")
     rows, err, _ = audit.run_stackql(q, auth, log_dir / "aws__regions.log")
     if err:
-        print(f"::error::region enumeration failed: {err.splitlines()[0]}")
+        print(f"error: region enumeration failed: {err.splitlines()[0]}")
         return []
     return [r["region_name"] for r in (rows or [])
             if r.get("region_name") and (r.get("opt_in_status") or "") in ("opt-in-not-required", "opted-in")]
@@ -487,11 +487,11 @@ def enumerate_regions(seed_region: str, auth: str, log_dir: Path, budget: Budget
 def run_aws_regions(dirname: str = "aws", title: str = "# StackQL AWS All-Regions Audit",
                     stream: str = "aws-regions-findings.jsonl") -> int:
     if not audit.provider_allowed("aws"):
-        print(f"::notice::skipping {dirname}: aws not in STACKQL_AUDIT_PROVIDERS")
+        print(f"skipping {dirname}: aws not in STACKQL_AUDIT_PROVIDERS")
         return 0
     seed = os.environ.get("AWS_REGION", "").strip()
     if not seed:
-        print("::error::AWS_REGION (a seed region to call DescribeRegions from) is required")
+        print("error: AWS_REGION (a seed region to call DescribeRegions from) is required")
         return 2
     parallel = max(1, int(os.environ.get("STACKQL_AWS_PARALLEL", "8")))
     fail_on = os.environ.get("FAIL_ON_SEVERITY", "HIGH").upper()
@@ -504,14 +504,14 @@ def run_aws_regions(dirname: str = "aws", title: str = "# StackQL AWS All-Region
     log_dir = _setup_log_dir()
     checks = load_checks(action_path, dirname, "aws")
     if not checks:
-        print(f"::warning::no checks found in queries/{dirname}/")
+        print(f"warning: no checks found in queries/{dirname}/")
         return 0
 
     budget = Budget.from_env(os.environ)
-    print(f"::notice::deep audit budget: {budget.describe_limits()}")
+    print(f"deep audit budget: {budget.describe_limits()}")
 
     regions = enumerate_regions(seed, auth, log_dir, budget)
-    print(f"::notice::{len(regions)} enabled region(s); auditing with {parallel} worker(s)")
+    print(f"{len(regions)} enabled region(s); auditing with {parallel} worker(s)")
 
     findings, stopped_reason, skipped, audited, scanned = _scope_fanout(
         "region", "AWS_REGION", regions, None, checks, auth,
@@ -535,7 +535,7 @@ def _gcp_list_children(parent: str, resource: str, cols: str,
          f"WHERE parent = '{parent}';")
     rows, err, _ = audit.run_stackql(q, auth, log_dir / f"gcp__{resource}__{safe}.log")
     if err:
-        print(f"::warning::list {resource} under {parent} failed: {err.splitlines()[0]}")
+        print(f"warning: list {resource} under {parent} failed: {err.splitlines()[0]}")
         return []
     return rows or []
 
@@ -565,11 +565,11 @@ def descend_org(org_id: str, auth: str, log_dir: Path, budget: Budget) -> tuple[
 def run_gcp_org(dirname: str = "google", title: str = "# StackQL GCP Org Audit",
                 stream: str = "gcp-org-findings.jsonl") -> int:
     if not audit.provider_allowed("google"):
-        print(f"::notice::skipping {dirname}: google not in STACKQL_AUDIT_PROVIDERS")
+        print(f"skipping {dirname}: google not in STACKQL_AUDIT_PROVIDERS")
         return 0
     org_id = os.environ.get("GOOGLE_ORG_ID", "").strip()
     if not org_id:
-        print("::error::GOOGLE_ORG_ID is required for the gcp org descent")
+        print("error: GOOGLE_ORG_ID is required for the gcp org descent")
         return 2
     parallel = max(1, int(os.environ.get("STACKQL_GCP_PARALLEL", "8")))
     fail_on = os.environ.get("FAIL_ON_SEVERITY", "HIGH").upper()
@@ -582,14 +582,14 @@ def run_gcp_org(dirname: str = "google", title: str = "# StackQL GCP Org Audit",
     log_dir = _setup_log_dir()
     checks = load_checks(action_path, dirname, "google")
     if not checks:
-        print(f"::warning::no checks found in queries/{dirname}/")
+        print(f"warning: no checks found in queries/{dirname}/")
         return 0
 
     budget = Budget.from_env(os.environ)
-    print(f"::notice::deep audit budget: {budget.describe_limits()}")
+    print(f"deep audit budget: {budget.describe_limits()}")
 
     project_ids, descent_stop = descend_org(org_id, auth, log_dir, budget)
-    print(f"::notice::descended organizations/{org_id}: {len(project_ids)} ACTIVE project(s)")
+    print(f"descended organizations/{org_id}: {len(project_ids)} ACTIVE project(s)")
 
     findings, stopped_reason, skipped, audited, scanned = _scope_fanout(
         "project", "PROJECT_ID", project_ids, descent_stop, checks, auth,
@@ -614,7 +614,7 @@ def descend_mgmt_group(group_id: str, auth: str, log_dir: Path, budget: Budget) 
          f"WHERE groupId = '{group_id}';")
     rows, err, _ = audit.run_stackql(q, auth, log_dir / f"azure__descendants__{safe}.log")
     if err:
-        print(f"::error::management-group descent failed: {err.splitlines()[0]}")
+        print(f"error: management-group descent failed: {err.splitlines()[0]}")
         return [], None
     subs: list[str] = []
     for r in rows or []:
@@ -630,7 +630,7 @@ def list_all_subscriptions(auth: str, log_dir: Path, budget: Budget) -> tuple[li
     q = "SELECT subscription_id, state FROM azure.resource.subscriptions;"
     rows, err, _ = audit.run_stackql(q, auth, log_dir / "azure__subscriptions.log")
     if err:
-        print(f"::error::subscription listing failed: {err.splitlines()[0]}")
+        print(f"error: subscription listing failed: {err.splitlines()[0]}")
         return [], None
     subs = [r["subscription_id"] for r in (rows or [])
             if r.get("subscription_id") and r.get("state") in (None, "Enabled")]
@@ -640,7 +640,7 @@ def list_all_subscriptions(auth: str, log_dir: Path, budget: Budget) -> tuple[li
 def run_azure_org(dirname: str = "azure", title: str = "# StackQL Azure Org Audit",
                   stream: str = "azure-org-findings.jsonl") -> int:
     if not audit.provider_allowed("azure"):
-        print(f"::notice::skipping {dirname}: azure not in STACKQL_AUDIT_PROVIDERS")
+        print(f"skipping {dirname}: azure not in STACKQL_AUDIT_PROVIDERS")
         return 0
     group_id = os.environ.get("AZURE_MGMT_GROUP", "").strip()
     parallel = max(1, int(os.environ.get("STACKQL_AZURE_PARALLEL", "8")))
@@ -654,11 +654,11 @@ def run_azure_org(dirname: str = "azure", title: str = "# StackQL Azure Org Audi
     log_dir = _setup_log_dir()
     checks = load_checks(action_path, dirname, "azure")
     if not checks:
-        print(f"::warning::no checks found in queries/{dirname}/")
+        print(f"warning: no checks found in queries/{dirname}/")
         return 0
 
     budget = Budget.from_env(os.environ)
-    print(f"::notice::deep audit budget: {budget.describe_limits()}")
+    print(f"deep audit budget: {budget.describe_limits()}")
 
     if group_id:
         subs, descent_stop = descend_mgmt_group(group_id, auth, log_dir, budget)
@@ -666,7 +666,7 @@ def run_azure_org(dirname: str = "azure", title: str = "# StackQL Azure Org Audi
     else:
         subs, descent_stop = list_all_subscriptions(auth, log_dir, budget)
         scope_label = "tenant (all subscriptions)"
-    print(f"::notice::Azure {scope_label}: {len(subs)} subscription(s); auditing with {parallel} worker(s)")
+    print(f"Azure {scope_label}: {len(subs)} subscription(s); auditing with {parallel} worker(s)")
 
     findings, stopped_reason, skipped, audited, scanned = _scope_fanout(
         "subscription", "SUBSCRIPTION_ID", subs, descent_stop, checks, auth,
@@ -710,10 +710,10 @@ def _aws_cli_json(args: list[str], log_dir: Path, tag: str):
 
 def run_finops_aws_rightsizing() -> int:
     if not audit.provider_allowed("aws"):
-        print("::notice::skipping finops-aws-rightsizing: aws not in STACKQL_AUDIT_PROVIDERS")
+        print("skipping finops-aws-rightsizing: aws not in STACKQL_AUDIT_PROVIDERS")
         return 0
     if not shutil.which("aws"):
-        print("::warning::aws CLI not found — skipping AWS rightsizing")
+        print("warning: aws CLI not found — skipping AWS rightsizing")
         return 0
     log_dir = _setup_log_dir()
     stream_path = Path(os.environ.get("STACKQL_AUDIT_STREAM")
@@ -727,7 +727,7 @@ def run_finops_aws_rightsizing() -> int:
     if not err and isinstance(doc, list) and doc:
         regions = doc
 
-    print(f"::notice::AWS Compute Optimizer across {len(regions)} region(s); streaming to {stream_path}")
+    print(f"AWS Compute Optimizer across {len(regions)} region(s); streaming to {stream_path}")
     findings = 0
     errors = 0
     with open(stream_path, "a", buffering=1) as stream:
@@ -740,7 +740,7 @@ def run_finops_aws_rightsizing() -> int:
                 stream.write(json.dumps({
                     "region": region, "check": "_meta/enum-error",
                     "name": "Compute Optimizer query failed", "severity": "UNKNOWN", "error": err}) + "\n")
-                print(f"::warning::compute-optimizer {region}: {err}")
+                print(f"warning: compute-optimizer {region}: {err}")
                 continue
             for rec in (doc or {}).get("instanceRecommendations", []):
                 if "over" not in (rec.get("finding") or "").lower():
@@ -801,7 +801,7 @@ def run_entra() -> int:
     there are no scopes to enumerate/descend — so this is a flat sweep, not a
     fan-out. Shares the same report/stream/budget machinery as the other targets."""
     if not audit.provider_allowed("entra_id"):
-        print("::notice::skipping entra: entra_id not in STACKQL_AUDIT_PROVIDERS")
+        print("skipping entra: entra_id not in STACKQL_AUDIT_PROVIDERS")
         return 0
     fail_on = os.environ.get("FAIL_ON_SEVERITY", "HIGH").upper()
     fail_threshold = audit.SEVERITY_ORDER.get(fail_on, 3)
@@ -813,29 +813,29 @@ def run_entra() -> int:
     log_dir = _setup_log_dir()
     checks = load_checks(action_path, "entra_id", "entra_id")
     if not checks:
-        print("::warning::no entra checks found in queries/entra_id/")
+        print("warning: no entra checks found in queries/entra_id/")
         return 0
 
     budget = Budget.from_env(os.environ)
-    print(f"::notice::deep audit budget: {budget.describe_limits()}")
+    print(f"deep audit budget: {budget.describe_limits()}")
 
     findings: dict[str, list[dict]] = {c["_file"]: [] for c in checks}
     scanned: dict[str, int | None] = {c["_file"]: (0 if c.get("filter") else None) for c in checks}
     stream_path = Path(os.environ.get("STACKQL_AUDIT_STREAM") or (_setup_stream_dir() / "entra-findings.jsonl"))
-    print(f"::notice::streaming findings to {stream_path}")
+    print(f"streaming findings to {stream_path}")
     stopped_reason: str | None = None
     with open(stream_path, "a", buffering=1) as stream:
         for c in checks:
             stopped_reason = budget.should_stop()
             if stopped_reason:
-                print(f"::warning::deep audit stopping early — {stopped_reason}; analyzing partial results")
+                print(f"warning: deep audit stopping early — {stopped_reason}; analyzing partial results")
                 break
             budget.add_query()
             log = log_dir / f"entra__{c['_file'].replace('/', '_')}.log"
             rows, err, _ = audit.run_stackql(c["query"], auth, log)
             if err:
                 first = err.splitlines()[0] if err else ""
-                print(f"::warning::entra check {c['_file']} errored: {first}")
+                print(f"warning: entra check {c['_file']} errored: {first}")
                 # Surface the errored (e.g. throttled) check as UNKNOWN, not a silent drop.
                 stream.write(json.dumps({
                     "check": "_meta/enum-error",
@@ -850,7 +850,7 @@ def run_entra() -> int:
                 try:
                     rows = audit.apply_filter(filters_mod, c["filter"], rows or [], c.get("filter_args"))
                 except Exception as e:
-                    print(f"::warning::filter {c['filter']} errored: {e}")
+                    print(f"warning: filter {c['filter']} errored: {e}")
                     continue
             if rows:
                 findings[c["_file"]] = rows
@@ -883,7 +883,7 @@ def main() -> int:
     target = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("DISCOVER_TARGET", "s3")
     fn = COMMANDS.get(target)
     if fn is None:
-        print(f"::error::unknown target '{target}'; available: {', '.join(COMMANDS)}")
+        print(f"error: unknown target '{target}'; available: {', '.join(COMMANDS)}")
         return 2
     return fn()
 
