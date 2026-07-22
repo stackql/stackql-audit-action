@@ -9,6 +9,7 @@ $GITHUB_STEP_SUMMARY.
 
 from __future__ import annotations
 
+import fnmatch
 import importlib.util
 import json
 import os
@@ -85,6 +86,21 @@ def provider_allowed(provider: str) -> bool:
     if not raw:
         return True
     return provider in set(raw.replace(",", " ").split())
+
+
+def check_skipped(check: dict) -> bool:
+    """Honour STACKQL_AUDIT_SKIP (space/comma separated glob patterns). Opt-in:
+    empty/unset skips nothing. A check is skipped when any pattern matches its
+    file path ("<dir>/<file>.yaml"), that file's basename, or its `id` — so a run
+    can drop specific checks (e.g. blob/storage) without deleting the YAML.
+    Examples: `*storage*`, `azure/storage-public-blob.yaml`, `s3/*`, `gcp-cloudsql-public-ip`."""
+    raw = os.environ.get("STACKQL_AUDIT_SKIP", "").strip()
+    if not raw:
+        return False
+    patterns = raw.replace(",", " ").split()
+    path = check.get("_file", "")
+    candidates = [path, os.path.basename(path), str(check.get("id", ""))]
+    return any(fnmatch.fnmatch(c, pat) for pat in patterns for c in candidates if c)
 
 
 def scope_vars(provider: str) -> dict[str, str]:
@@ -268,6 +284,9 @@ def main() -> int:
                 check = yaml.safe_load(f)
             check["_file"] = f"{provider}/{cf.name}"
             check["_provider"] = provider
+            if check_skipped(check):
+                print(f"::notice::skipping {check['_file']}: matched STACKQL_AUDIT_SKIP")
+                continue
             checks.append(check)
 
     if not checks:

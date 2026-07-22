@@ -104,6 +104,9 @@ def load_checks(action_path: Path, dirname: str, provider_tag: str) -> list[dict
         c = yaml.safe_load(cf.open())
         c["_file"] = f"{dirname}/{cf.name}"
         c["_provider"] = provider_tag
+        if audit.check_skipped(c):
+            print(f"::notice::skipping {c['_file']}: matched STACKQL_AUDIT_SKIP")
+            continue
         checks.append(c)
     return checks
 
