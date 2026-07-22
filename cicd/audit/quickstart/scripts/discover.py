@@ -448,14 +448,14 @@ def run_s3() -> int:
 def enumerate_regions(seed_region: str, auth: str, log_dir: Path, budget: Budget) -> list[str]:
     """Enabled region names via DescribeRegions (one call, account-wide)."""
     budget.add_query()
-    q = ("SELECT regionName, optInStatus FROM aws.ec2_native.regions "
+    q = ("SELECT region_name, opt_in_status FROM aws.ec2.regions "
          f"WHERE region = '{seed_region}';")
     rows, err, _ = audit.run_stackql(q, auth, log_dir / "aws__regions.log")
     if err:
         print(f"::error::region enumeration failed: {err.splitlines()[0]}")
         return []
-    return [r["regionName"] for r in (rows or [])
-            if r.get("regionName") and (r.get("optInStatus") or "") in ("opt-in-not-required", "opted-in")]
+    return [r["region_name"] for r in (rows or [])
+            if r.get("region_name") and (r.get("opt_in_status") or "") in ("opt-in-not-required", "opted-in")]
 
 
 def run_aws_regions(dirname: str = "aws", title: str = "# StackQL AWS All-Regions Audit",
@@ -601,13 +601,13 @@ def descend_mgmt_group(group_id: str, auth: str, log_dir: Path, budget: Budget) 
 def list_all_subscriptions(auth: str, log_dir: Path, budget: Budget) -> tuple[list[str], str | None]:
     """Flat tenant-wide subscription list (fallback when no management group given)."""
     budget.add_query()
-    q = "SELECT subscriptionId, state FROM azure.subscription.subscriptions;"
+    q = "SELECT subscription_id, state FROM azure.resource.subscriptions;"
     rows, err, _ = audit.run_stackql(q, auth, log_dir / "azure__subscriptions.log")
     if err:
         print(f"::error::subscription listing failed: {err.splitlines()[0]}")
         return [], None
-    subs = [r["subscriptionId"] for r in (rows or [])
-            if r.get("subscriptionId") and r.get("state") in (None, "Enabled")]
+    subs = [r["subscription_id"] for r in (rows or [])
+            if r.get("subscription_id") and r.get("state") in (None, "Enabled")]
     return subs, budget.should_stop()
 
 
