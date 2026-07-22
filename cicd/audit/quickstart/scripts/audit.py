@@ -190,22 +190,29 @@ def execute_check(check: dict, auth: str, filters_mod: Any, log_dir: Path) -> di
     rows, err, rc = run_stackql(query, auth, log_dir / f"{slug}.log")
     if err:
         return {"check": check, "status": "error", "error": err, "rows": [], "exit_code": rc}
+    # Population scanned = the pre-filter row count (the whole resource set the
+    # filter then narrows to violations). WHERE-clause checks return only the
+    # violations, so they have no denominator → scanned = None (nothing printed).
+    scanned = len(rows or []) if check.get("filter") else None
     if check.get("filter"):
         try:
             rows = apply_filter(filters_mod, check["filter"], rows or [], check.get("filter_args"))
         except Exception as e:
             return {"check": check, "status": "error", "error": f"filter error: {e}", "rows": [], "exit_code": rc}
     if not rows:
-        return {"check": check, "status": "pass", "rows": [], "exit_code": rc}
-    return {"check": check, "status": "findings", "rows": rows, "exit_code": rc}
+        return {"check": check, "status": "pass", "rows": [], "exit_code": rc, "scanned": scanned}
+    return {"check": check, "status": "findings", "rows": rows, "exit_code": rc, "scanned": scanned}
 
 
-def render_findings(check: dict, rows: list[dict]) -> str:
+def render_findings(check: dict, rows: list[dict], scanned: int | None = None) -> str:
     sev = check.get("severity", "MEDIUM").upper()
     badge = SEVERITY_BADGE.get(sev, sev)
     prov = check.get("_provider", "").upper()
     lines: list[str] = []
-    lines.append(f"### {badge} — `{prov}` {check['name']}  ·  {len(rows)} finding(s)")
+    head = f"### {badge} — `{prov}` {check['name']}  ·  {len(rows)} finding(s)"
+    if scanned is not None:
+        head += f" of {scanned:,} scanned"
+    lines.append(head)
     if check.get("description"):
         lines.append(f"_{check['description'].strip()}_\n")
     columns = check.get("columns") or list(rows[0].keys())
@@ -225,11 +232,15 @@ def render_findings(check: dict, rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def render_pass(check: dict) -> str:
+def render_pass(check: dict, scanned: int | None = None) -> str:
     prov = check.get("_provider", "").upper()
     name = check["name"]
     desc = (check.get("description") or "").strip()
-    return f"### ✅ `{prov}` {name}\n_{desc}_\n\nNo findings.\n"
+    head = f"### ✅ `{prov}` {name}"
+    if scanned is not None:
+        head += f"  ·  {scanned:,} scanned"
+    body = f"0 of {scanned:,} — no findings." if scanned is not None else "No findings."
+    return f"{head}\n_{desc}_\n\n{body}\n"
 
 
 def render_error(check: dict, err: str) -> str:
@@ -344,7 +355,7 @@ def main() -> int:
             print(f"::warning::{check['name']}: {r['error'].splitlines()[0]}")
             continue
         if r["status"] == "pass":
-            sections.append(render_pass(check))
+            sections.append(render_pass(check, r.get("scanned")))
             continue
         rows = r["rows"]
         sev = check.get("severity", "MEDIUM").upper()
@@ -360,7 +371,7 @@ def main() -> int:
                 "severity": sev,
                 "fields": row,
             })
-        sections.append(render_findings(check, rows))
+        sections.append(render_findings(check, rows, r.get("scanned")))
 
     # Stream findings as per-provider NDJSON (one file per provider), separate
     # from the .log files — the actions upload/merge this folder on its own.

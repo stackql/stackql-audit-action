@@ -106,6 +106,18 @@ def load_checks(action_path: Path, dirname: str, provider_tag: str) -> list[dict
         c["_provider"] = provider_tag
         if audit.check_skipped(c):
             print(f"::notice::skipping {c['_file']}: matched STACKQL_AUDIT_SKIP")
+            # Record it so the merge roll-up can name what was skipped, rather than
+            # the check silently vanishing from the report.
+            try:
+                with open(_setup_stream_dir() / f"{dirname}-skipped.jsonl", "a", buffering=1) as sf:
+                    sf.write(json.dumps({
+                        "check": c["_file"],
+                        "name": c.get("name"),
+                        "severity": (c.get("severity") or "MEDIUM").upper(),
+                        "reason": "STACKQL_AUDIT_SKIP",
+                    }) + "\n")
+            except OSError:
+                pass
             continue
         checks.append(c)
     return checks
@@ -125,22 +137,25 @@ def _budget_line(budget: Budget, stopped_reason: str | None, skipped: int) -> st
 def _finalize_report(title: str, header_lines: list[str], checks: list[dict],
                      findings: dict[str, list[dict]], label: str | None,
                      log_dir: Path, fail_on: str, fail_threshold: int,
-                     target: str = "") -> int:
+                     target: str = "", scanned: dict | None = None) -> int:
     """Render the markdown summary + sections, emit outputs, return the exit code.
 
     If `label` is set, it's prepended as a column to each finding (e.g. which
     project/region/subscription the finding came from). If `target` is set, an
     assayed-tally is written so absent/clean resources are reported plainly in the
     data output (not just silently missing): one row per check with its count and
-    status (clean / findings)."""
+    status (clean / findings). `scanned` is {check_file: population} so each check
+    reports its findings *out of how many* (None = no denominator)."""
+    scanned = scanned or {}
     by_sev = {k: 0 for k in audit.SEVERITY_ORDER}
     total = 0
     highest = "NONE"
     sections: list[str] = []
     for c in checks:
         rows = findings.get(c["_file"], [])
+        sc = scanned.get(c["_file"])
         if not rows:
-            sections.append(audit.render_pass(c))
+            sections.append(audit.render_pass(c, sc))
             continue
         sev = c.get("severity", "MEDIUM").upper()
         by_sev[sev] += len(rows)
@@ -152,7 +167,7 @@ def _finalize_report(title: str, header_lines: list[str], checks: list[dict],
             rc = {**c, "columns": [label] + base}
         else:
             rc = c
-        sections.append(audit.render_findings(rc, rows))
+        sections.append(audit.render_findings(rc, rows, sc))
 
     out = [title, *header_lines, "", "## Summary", "| Severity | Findings |", "| --- | --- |"]
     for s in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
@@ -175,6 +190,7 @@ def _finalize_report(title: str, header_lines: list[str], checks: list[dict],
                         "name": c.get("name"),
                         "severity": (c.get("severity") or "MEDIUM").upper(),
                         "count": n,
+                        "scanned": scanned.get(c["_file"]),
                         "status": "findings" if n else "clean",
                     }) + "\n")
         except OSError as e:
@@ -225,17 +241,20 @@ def _finalize_report(title: str, header_lines: list[str], checks: list[dict],
 def audit_scope(label: str, scope_var: str, scope_value: str, checks: list[dict],
                 auth: str, filters_mod, log_dir: Path, budget: Budget):
     """Run every query-check for one scope (region / project / subscription),
-    substituting ${scope_var}. Returns (findings, errors) — findings is
+    substituting ${scope_var}. Returns (findings, errors, scanned) — findings is
     {check_file: rows} (rows tagged with `label`=scope_value); errors is a list
     of {failed_check, error} for queries that errored (e.g. throttled), so the
-    caller can surface them as UNKNOWN instead of dropping them. Returns None if
-    the budget was exhausted (scope skipped)."""
+    caller can surface them as UNKNOWN instead of dropping them; scanned is
+    {check_file: pre_filter_row_count} for filter checks (the population for this
+    one scope, summed across scopes by the caller). Returns None if the budget was
+    exhausted (scope skipped)."""
     if budget.should_stop():
         return None
     budget.add_node()
     safe = scope_value.replace("/", "_")
     out: dict[str, list[dict]] = {}
     errors: list[dict] = []
+    scanned: dict[str, int] = {}
     for c in checks:
         query = c["query"].replace("${" + scope_var + "}", scope_value)
         budget.add_query()
@@ -245,6 +264,7 @@ def audit_scope(label: str, scope_var: str, scope_value: str, checks: list[dict]
             errors.append({"failed_check": c["_file"], "error": err.splitlines()[0] if err else ""})
             continue
         if c.get("filter"):
+            scanned[c["_file"]] = len(rows or [])  # population before the filter narrows it
             try:
                 rows = audit.apply_filter(filters_mod, c["filter"], rows or [], c.get("filter_args"))
             except Exception as e:
@@ -254,17 +274,19 @@ def audit_scope(label: str, scope_var: str, scope_value: str, checks: list[dict]
             for r in rows:
                 r[label] = scope_value
             out[c["_file"]] = rows
-    return out, errors
+    return out, errors, scanned
 
 
 def _scope_fanout(label: str, scope_var: str, scope_values: list[str], descent_stop: str | None,
                   checks: list[dict], auth: str, filters_mod, log_dir: Path, budget: Budget,
                   parallel: int, stream_name: str):
     """Audit each scope in parallel; stream findings; return (findings, stopped_reason,
-    skipped, audited)."""
+    skipped, audited, scanned) — scanned is {check_file: total population scanned across
+    all scopes} for filter checks (None for WHERE-clause checks, which have no denominator)."""
     stream_path = Path(os.environ.get("STACKQL_AUDIT_STREAM") or (_setup_stream_dir() / stream_name))
     print(f"::notice::streaming findings to {stream_path}")
     findings: dict[str, list[dict]] = {c["_file"]: [] for c in checks}
+    scanned_totals: dict[str, int | None] = {c["_file"]: (0 if c.get("filter") else None) for c in checks}
     skipped = 0
     audited = 0
     stopped_reason = descent_stop
@@ -281,8 +303,10 @@ def _scope_fanout(label: str, scope_var: str, scope_values: list[str], descent_s
                     stopped_reason = budget.should_stop()
                     print(f"::warning::deep audit stopping early — {stopped_reason}; analyzing partial results")
                 continue
-            out_map, errors = res
+            out_map, errors, scanned_map = res
             audited += 1
+            for cfile, n in scanned_map.items():
+                scanned_totals[cfile] = (scanned_totals.get(cfile) or 0) + n
             for cfile, rows in out_map.items():
                 findings[cfile].extend(rows)
                 c = next(x for x in checks if x["_file"] == cfile)
@@ -305,7 +329,7 @@ def _scope_fanout(label: str, scope_var: str, scope_values: list[str], descent_s
                     "failed_check": e["failed_check"],
                     "error": e["error"],
                 }) + "\n")
-    return findings, stopped_reason, skipped, audited
+    return findings, stopped_reason, skipped, audited, scanned_totals
 
 
 # --- target: AWS S3 full audit ---------------------------------------------
@@ -439,8 +463,10 @@ def run_s3() -> int:
          f"**Checks:** {len(checks)}  ·  **Fetch errors:** {len(fetch_errors)}"),
         _budget_line(budget, stopped_reason, skipped),
     ]
+    # Every S3 check is evaluated against the same fetched bucket population.
+    scanned = {c["_file"]: len(buckets) for c in checks}
     return _finalize_report("# StackQL S3 Audit", header, checks, findings, None,
-                            log_dir, fail_on, fail_threshold, target="s3")
+                            log_dir, fail_on, fail_threshold, target="s3", scanned=scanned)
 
 
 # --- target: AWS all-regions sweep -----------------------------------------
@@ -487,7 +513,7 @@ def run_aws_regions(dirname: str = "aws", title: str = "# StackQL AWS All-Region
     regions = enumerate_regions(seed, auth, log_dir, budget)
     print(f"::notice::{len(regions)} enabled region(s); auditing with {parallel} worker(s)")
 
-    findings, stopped_reason, skipped, audited = _scope_fanout(
+    findings, stopped_reason, skipped, audited, scanned = _scope_fanout(
         "region", "AWS_REGION", regions, None, checks, auth,
         filters_mod, log_dir, budget, parallel, stream)
     header = [
@@ -495,7 +521,7 @@ def run_aws_regions(dirname: str = "aws", title: str = "# StackQL AWS All-Region
         _budget_line(budget, stopped_reason, skipped),
     ]
     return _finalize_report(title, header, checks, findings, "region",
-                            log_dir, fail_on, fail_threshold, target=dirname)
+                            log_dir, fail_on, fail_threshold, target=dirname, scanned=scanned)
 
 
 # --- target: GCP org descent ------------------------------------------------
@@ -565,7 +591,7 @@ def run_gcp_org(dirname: str = "google", title: str = "# StackQL GCP Org Audit",
     project_ids, descent_stop = descend_org(org_id, auth, log_dir, budget)
     print(f"::notice::descended organizations/{org_id}: {len(project_ids)} ACTIVE project(s)")
 
-    findings, stopped_reason, skipped, audited = _scope_fanout(
+    findings, stopped_reason, skipped, audited, scanned = _scope_fanout(
         "project", "PROJECT_ID", project_ids, descent_stop, checks, auth,
         filters_mod, log_dir, budget, parallel, stream)
     header = [
@@ -574,7 +600,7 @@ def run_gcp_org(dirname: str = "google", title: str = "# StackQL GCP Org Audit",
         _budget_line(budget, stopped_reason, skipped),
     ]
     return _finalize_report(title, header, checks, findings, "project",
-                            log_dir, fail_on, fail_threshold, target=dirname)
+                            log_dir, fail_on, fail_threshold, target=dirname, scanned=scanned)
 
 
 # --- target: Azure management-group descent ---------------------------------
@@ -642,7 +668,7 @@ def run_azure_org(dirname: str = "azure", title: str = "# StackQL Azure Org Audi
         scope_label = "tenant (all subscriptions)"
     print(f"::notice::Azure {scope_label}: {len(subs)} subscription(s); auditing with {parallel} worker(s)")
 
-    findings, stopped_reason, skipped, audited = _scope_fanout(
+    findings, stopped_reason, skipped, audited, scanned = _scope_fanout(
         "subscription", "SUBSCRIPTION_ID", subs, descent_stop, checks, auth,
         filters_mod, log_dir, budget, parallel, stream)
     header = [
@@ -651,7 +677,7 @@ def run_azure_org(dirname: str = "azure", title: str = "# StackQL Azure Org Audi
         _budget_line(budget, stopped_reason, skipped),
     ]
     return _finalize_report(title, header, checks, findings, "subscription",
-                            log_dir, fail_on, fail_threshold, target=dirname)
+                            log_dir, fail_on, fail_threshold, target=dirname, scanned=scanned)
 
 
 # --- target: FinOps (orphan/unattached resources, costed from the snapshot) --
@@ -794,6 +820,7 @@ def run_entra() -> int:
     print(f"::notice::deep audit budget: {budget.describe_limits()}")
 
     findings: dict[str, list[dict]] = {c["_file"]: [] for c in checks}
+    scanned: dict[str, int | None] = {c["_file"]: (0 if c.get("filter") else None) for c in checks}
     stream_path = Path(os.environ.get("STACKQL_AUDIT_STREAM") or (_setup_stream_dir() / "entra-findings.jsonl"))
     print(f"::notice::streaming findings to {stream_path}")
     stopped_reason: str | None = None
@@ -819,6 +846,7 @@ def run_entra() -> int:
                 }) + "\n")
                 continue
             if c.get("filter"):
+                scanned[c["_file"]] = len(rows or [])  # directory population before the filter
                 try:
                     rows = audit.apply_filter(filters_mod, c["filter"], rows or [], c.get("filter_args"))
                 except Exception as e:
@@ -835,7 +863,7 @@ def run_entra() -> int:
         _budget_line(budget, stopped_reason, 0),
     ]
     return _finalize_report("# StackQL Entra ID Audit", header, checks, findings, None,
-                            log_dir, fail_on, fail_threshold, target="entra")
+                            log_dir, fail_on, fail_threshold, target="entra", scanned=scanned)
 
 
 COMMANDS = {
